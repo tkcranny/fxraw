@@ -29,6 +29,14 @@ This is the key step for reverse-engineering the RAW conversion protocol.
 cargo run -- probe
 ```
 
+### recipes
+
+List all 132 built-in recipe presets.
+
+```
+cargo run -- recipes
+```
+
 ### convert
 
 Convert a RAF file to JPEG using the camera's image processor.
@@ -36,18 +44,43 @@ Convert a RAF file to JPEG using the camera's image processor.
 ```
 cargo run -- convert photo.raf
 cargo run -- convert photo.raf -o output.jpg
+cargo run -- convert photo.raf -r kodak-tri-x-400
+cargo run -- convert photo.raf -r "kodak gold" -o gold.jpg
 cargo run -- convert photo.raf -f acros -g weak -o acros.jpg
 ```
 
-#### Recipe options
+#### Options
 
-| Flag | Values |
-|------|--------|
-| `-f, --film-sim` | provia, velvia, astia, classic-chrome, classic-neg, pro-neg-hi, pro-neg-std, eterna, eterna-bleach-bypass, acros, acros-ye, acros-r, acros-g, monochrome, monochrome-ye, monochrome-r, monochrome-g, sepia, nostalgic-neg, reala-ace |
-| `-g, --grain` | off, weak, strong |
+| Flag | Description |
+|------|-------------|
+| `-o, --output <PATH>` | Output JPEG path (defaults to `<input>.jpg`) |
+| `-r, --recipe <NAME>` | Use a built-in recipe preset (exact slug or partial match on slug/name) |
+| `-f, --film-sim <SIM>` | Film simulation override (takes priority over recipe) |
+| `-g, --grain <LEVEL>` | Grain effect override (takes priority over recipe) |
 
-Without recipe flags the camera's current settings are used (same as
-X RAW Studio's default behaviour).
+#### Recipes
+
+The `-r` flag accepts a recipe slug (e.g. `kodak-tri-x-400`) or a partial
+match on the slug or name (e.g. `tri-x`, `portra`, `cinestill 800t`).
+Run `recipes` to see the full list.
+
+Each recipe sets some combination of: film simulation, grain, highlight/shadow
+tone, color, sharpness, noise reduction, clarity, white balance, and WB shift.
+The `-f` and `-g` flags override the recipe's film simulation and grain if
+both are given.
+
+#### Film simulations
+
+provia, velvia, astia, classic-chrome, classic-neg, pro-neg-hi, pro-neg-std,
+eterna, eterna-bleach-bypass, acros, acros-ye, acros-r, acros-g, monochrome,
+monochrome-ye, monochrome-r, monochrome-g, sepia, nostalgic-neg, reala-ace
+
+#### Grain
+
+off, weak, strong
+
+Without any recipe or override flags the camera's current settings are used
+(same as X RAW Studio's default behaviour).
 
 ## Camera setup
 
@@ -72,9 +105,12 @@ processes a RAF file:
 
 ```
 src/
-  main.rs     CLI entry point (detect / probe / convert)
+  main.rs     CLI entry point (detect / probe / recipes / convert)
   detect.rs   USB device scanning
   ptp.rs      PTP-over-USB protocol layer
   fuji.rs     Fujifilm-specific PTP operations
   profile.rs  D185 profile parsing and recipe settings
+  recipes.rs  Built-in recipe presets (loaded from data/recipes.json)
+data/
+  recipes.json  132 film simulation recipes
 ```

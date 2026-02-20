@@ -4,8 +4,9 @@ mod detect;
 mod fuji;
 mod profile;
 mod ptp;
+mod recipes;
 
-use profile::{FilmSimulation, GrainEffect, RecipeSettings};
+use profile::{FilmSimulation, GrainEffect};
 
 #[derive(Parser)]
 #[command(name = "fuji-usb-test")]
@@ -23,6 +24,9 @@ enum Commands {
     /// Probe the camera's PTP capabilities (operations, properties, formats)
     Probe,
 
+    /// List available built-in recipes
+    Recipes,
+
     /// Convert a RAF file to JPEG using the camera's image processor
     Convert {
         /// Path to the input RAF file
@@ -32,11 +36,15 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
 
-        /// Film simulation to apply
+        /// Use a built-in recipe preset (name or partial match)
+        #[arg(short, long)]
+        recipe: Option<String>,
+
+        /// Film simulation (overrides recipe if both given)
         #[arg(short, long, value_enum)]
         film_sim: Option<FilmSimulation>,
 
-        /// Grain effect
+        /// Grain effect (overrides recipe if both given)
         #[arg(short, long, value_enum)]
         grain: Option<GrainEffect>,
     },
@@ -47,14 +55,32 @@ fn main() {
     match cli.command {
         Commands::Detect => detect::run(),
         Commands::Probe => fuji::probe(),
+        Commands::Recipes => recipes::list_recipes(),
         Commands::Convert {
             input,
             output,
+            recipe,
             film_sim,
             grain,
         } => {
-            let recipe = RecipeSettings { film_sim, grain };
-            fuji::convert(&input, output.as_deref(), &recipe);
+            let mut settings = if let Some(ref name) = recipe {
+                match recipes::find(name) {
+                    Some(r) => {
+                        println!("Recipe: {} ({})\n", r.name, r.slug);
+                        r.to_settings()
+                    }
+                    None => {
+                        eprintln!("Recipe '{}' not found.", name);
+                        eprintln!("Run `fuji-usb-test recipes` to list available presets.");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                Default::default()
+            };
+
+            settings.merge_cli(film_sim, grain);
+            fuji::convert(&input, output.as_deref(), &settings);
         }
     }
 }

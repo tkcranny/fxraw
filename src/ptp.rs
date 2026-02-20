@@ -2,6 +2,7 @@
 
 use rusb::{Context, DeviceHandle, Direction, TransferType, UsbContext};
 use std::time::Duration;
+use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // PTP container types and header
@@ -166,27 +167,58 @@ impl PtpCamera {
                 _ => return Err("No bulk endpoints found on device".into()),
             };
 
-            let handle = device
-                .open()
-                .map_err(|e| format!("Cannot open USB device: {e}"))?;
+            // On macOS, the system PTP daemon (ptpcamerad) auto-claims the
+            // camera interface. We retry several times, killing the daemon
+            // before each attempt so we can race to claim it first.
+            let max_retries = 5;
+            let mut last_err = String::new();
 
-            let _ = handle.set_auto_detach_kernel_driver(true);
+            for attempt in 0..max_retries {
+                if attempt > 0 {
+                    kill_macos_ptp_daemons();
+                    std::thread::sleep(Duration::from_millis(200));
+                }
 
-            handle.claim_interface(iface_num).map_err(|e| {
-                format!(
-                    "Cannot claim interface {iface_num}: {e}. \
-                     Is another app (Photos, Image Capture) using the camera?"
-                )
-            })?;
+                let handle = match device.open() {
+                    Ok(h) => h,
+                    Err(e) => {
+                        last_err = format!("Cannot open USB device: {e}");
+                        continue;
+                    }
+                };
 
-            return Ok(PtpCamera {
-                handle,
-                ep_in,
-                ep_out,
-                iface: iface_num,
-                transaction_id: 0,
-                timeout: Duration::from_secs(5),
-            });
+                let _ = handle.set_auto_detach_kernel_driver(true);
+                let _ = handle.detach_kernel_driver(iface_num);
+
+                match handle.claim_interface(iface_num) {
+                    Ok(()) => {
+                        return Ok(PtpCamera {
+                            handle,
+                            ep_in,
+                            ep_out,
+                            iface: iface_num,
+                            transaction_id: 0,
+                            timeout: Duration::from_secs(5),
+                        });
+                    }
+                    Err(e) => {
+                        last_err = format!(
+                            "Cannot claim interface {iface_num}: {e}. \
+                             Is another app (Photos, Image Capture) using the camera?"
+                        );
+                        if attempt == 0 {
+                            eprintln!(
+                                "  Interface claimed by another process, \
+                                 attempting to release (retry {}/{})...",
+                                attempt + 1,
+                                max_retries
+                            );
+                        }
+                    }
+                }
+            }
+
+            return Err(last_err);
         }
 
         Err(format!(
@@ -490,6 +522,17 @@ impl PtpCamera {
         params: &[u32],
     ) -> Result<(Vec<u8>, PtpResponse), String> {
         self.transact_data_in(op, params, Duration::from_secs(10))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// macOS PTP daemon management
+// ---------------------------------------------------------------------------
+
+/// Kill macOS system daemons that auto-claim PTP camera interfaces.
+fn kill_macos_ptp_daemons() {
+    for name in &["ptpcamerad", "mscamerad-xpc"] {
+        let _ = Command::new("killall").arg(name).output();
     }
 }
 

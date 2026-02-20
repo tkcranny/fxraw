@@ -288,6 +288,7 @@ pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
         Ok(data) => {
             println!("  Got {} bytes of profile data", data.len());
             println!("  Current film sim: {}", profile::current_film_sim(&data));
+            profile::dump_profile(&data);
             data
         }
         Err(e) => {
