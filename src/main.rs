@@ -10,8 +10,8 @@ mod recipes;
 use profile::{parse_exposure_comp, FilmSimulation, GrainEffect};
 
 #[derive(Parser)]
-#[command(name = "fuji-usb-test")]
-#[command(about = "Detect and interact with a Fujifilm X100VI camera over USB")]
+#[command(name = "fjx")]
+#[command(about = "Fujifilm X100VI USB RAW converter with film simulation recipes")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -75,7 +75,7 @@ fn main() {
                     Some(r) => recipes::show_recipe(r),
                     None => {
                         eprintln!("Recipe '{}' not found.", query);
-                        eprintln!("Run `fuji-usb-test recipes` to list available presets.");
+                        eprintln!("Run `fjx recipes` to list available presets.");
                         std::process::exit(1);
                     }
                 }
@@ -108,7 +108,7 @@ fn main() {
                     }
                     None => {
                         eprintln!("Recipe '{}' not found.", name);
-                        eprintln!("Run `fuji-usb-test recipes` to list available presets.");
+                        eprintln!("Run `fjx recipes` to list available presets.");
                         std::process::exit(1);
                     }
                 }

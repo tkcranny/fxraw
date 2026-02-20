@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BINARY="./target/release/fuji-usb-test"
+BINARY="./target/release/fjx"
 RAF="DSCF7496.RAF"
 RECIPE="${1:-classic-amber}"
 OUTPUT="/tmp/test_recipe_${RECIPE}.jpg"

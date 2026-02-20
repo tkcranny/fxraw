@@ -1,4 +1,4 @@
-# fuji-usb-test
+# fjx
 
 Detect and interact with a Fujifilm X100VI camera over USB. The end goal is
 on-camera RAF-to-JPEG conversion, like Fuji X RAW Studio.
