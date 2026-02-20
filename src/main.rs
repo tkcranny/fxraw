@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod analyse;
 mod detect;
 mod fuji;
 mod profile;
@@ -28,6 +29,12 @@ enum Commands {
     Recipes {
         /// Recipe slug or name to show details for
         slug: Option<String>,
+    },
+
+    /// Analyse a RAF or JPEG — show EXIF recipe settings and closest recipe matches
+    Analyse {
+        /// Path to a RAF or JPEG file
+        file: String,
     },
 
     /// Convert a RAF file to JPEG using the camera's image processor
@@ -76,6 +83,7 @@ fn main() {
                 recipes::list_recipes();
             }
         }
+        Commands::Analyse { file } => analyse::run(&file),
         Commands::Convert {
             input,
             output,
