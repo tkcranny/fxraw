@@ -144,11 +144,18 @@ pub fn find(query: &str) -> Option<&'static Recipe> {
 pub fn list_recipes() {
     println!("{} built-in recipes (X100VI compatible):\n", RECIPES.len());
     for r in RECIPES.iter() {
+        let dr = match r.dynamic_range {
+            Some(v) => format!("DR{v}"),
+            None => "auto".into(),
+        };
+        let wb = match (r.white_balance.as_deref(), r.wb_temp) {
+            (Some("temperature"), Some(t)) => format!("{t}K"),
+            (Some(wb), _) => wb.to_string(),
+            (None, _) => "auto".into(),
+        };
         println!(
-            "  {:<35} {:>20}   {}",
-            r.slug,
-            r.name,
-            r.film_sim
+            "  {:<35} {:<22} {:<6} {}",
+            r.slug, r.film_sim, dr, wb
         );
     }
 }

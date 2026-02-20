@@ -242,6 +242,7 @@ def build(xlsx_path: str, sensor_filter: set[str]) -> list[dict]:
 
         recipes.append(rec)
 
+    recipes.sort(key=lambda r: r["slug"])
     return recipes
 
 
