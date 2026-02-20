@@ -117,7 +117,16 @@ fn main() {
             };
 
             settings.merge_cli(film_sim, grain, ev);
-            fuji::convert(&input, output.as_deref(), &settings);
+
+            let output = output.unwrap_or_else(|| {
+                let stem = std::path::Path::new(&input)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let suffix = recipe.as_deref().unwrap_or("converted");
+                format!("{stem}-{suffix}.jpg")
+            });
+            fuji::convert(&input, Some(&output), &settings);
         }
     }
 }
