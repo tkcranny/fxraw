@@ -1,0 +1,285 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["openpyxl"]
+# ///
+"""
+Fetch the FujiXWeekly recipe spreadsheet and generate data/recipes.json.
+
+Usage:
+    scripts/build_recipes                  # fetch + build
+    scripts/build_recipes --local FILE     # use a previously downloaded .xlsx
+    scripts/build_recipes --sensor IV,V    # sensor filter (default: IV,V)
+"""
+
+import argparse
+import json
+import re
+import sys
+import urllib.request
+from pathlib import Path
+
+import openpyxl
+
+XLSX_URL = "https://fxwapp.s3.amazonaws.com/FXW+App+Recipes.xlsx"
+OUT_PATH = Path(__file__).resolve().parent.parent / "data" / "recipes.json"
+
+# ── Mapping tables ──────────────────────────────────────────────────────────
+
+FILM_SIM_MAP = {
+    "Provia": "provia",
+    "Velvia": "velvia",
+    "Astia": "astia",
+    "Classic Chrome": "classic-chrome",
+    "Classic Negative": "classic-neg",
+    "PRO Neg. Hi": "pro-neg-hi",
+    "PRO Neg. Std": "pro-neg-std",
+    "Eterna": "eterna",
+    "Eterna Bleach Bypass": "eterna-bleach-bypass",
+    "Acros": "acros",
+    "Acros+Y": "acros-ye",
+    "Acros+R": "acros-r",
+    "Acros+G": "acros-g",
+    "Monochrome": "monochrome",
+    "Monochrome+R": "monochrome-r",
+    "Monochrome+G": "monochrome-g",
+    "Sepia": "sepia",
+    "Nostalgic Neg.": "nostalgic-neg",
+    "Reala Ace": "reala-ace",
+}
+
+WB_MAP = {
+    "Auto": "auto",
+    "Auto White Priority": "auto-white",
+    "Auto Ambience Priority": "auto-ambience",
+    "Daylight": "daylight",
+    "Daylight/Fine": "daylight",
+    "Custom Daylight": "daylight",
+    "Shade": "shade",
+    "Incandescent": "incandescent",
+    "Fluorescent 1": "fluorescent-1",
+    "Fluorescent 2": "fluorescent-2",
+    "Fluorescent 3": "fluorescent-3",
+    "Underwater": "underwater",
+}
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def slugify(name: str) -> str:
+    s = name.lower().strip()
+    s = re.sub(r"['']+", "", s)
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = s.strip("-")
+    return s
+
+
+def parse_num(val) -> float | None:
+    """Parse a cell that may be int, float, or string like '+4', '-2', '0'."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().lstrip("+")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def parse_int(val) -> int | None:
+    n = parse_num(val)
+    return int(n) if n is not None else None
+
+
+def parse_dr(val) -> int | None:
+    if not val:
+        return None
+    s = str(val).strip()
+    m = re.match(r"DR(\d+)", s)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def parse_grain(val) -> tuple[str | None, str | None]:
+    if not val or str(val).strip().lower() == "off":
+        return None, None
+    parts = str(val).strip().lower().split()
+    roughness = parts[0] if parts else None
+    size = parts[1] if len(parts) > 1 else "small"
+    if roughness not in ("weak", "strong"):
+        return None, None
+    if size not in ("small", "large"):
+        size = "small"
+    return roughness, size
+
+
+def parse_chrome(val) -> str | None:
+    if not val:
+        return None
+    s = str(val).strip().lower()
+    if s in ("off", "off/na"):
+        return "off"
+    if s in ("weak", "strong"):
+        return s
+    return None
+
+
+def parse_wb(val) -> tuple[str | None, int | None]:
+    if not val:
+        return None, None
+    s = str(val).strip()
+    if s in WB_MAP:
+        return WB_MAP[s], None
+    m = re.match(r"(\d+)\s*K", s)
+    if m:
+        return "temperature", int(m.group(1))
+    return None, None
+
+
+def parse_film_sim(val) -> str | None:
+    if not val:
+        return None
+    s = str(val).strip()
+    return FILM_SIM_MAP.get(s)
+
+
+def sensor_matches(sensor_str: str | None, wanted: set[str]) -> bool:
+    if not sensor_str:
+        return False
+    return any(f"X-Trans {g}" in sensor_str for g in wanted)
+
+
+# ── Main ────────────────────────────────────────────────────────────────────
+
+
+def build(xlsx_path: str, sensor_filter: set[str]) -> list[dict]:
+    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    ws = wb["Sheet1"]
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    wb.close()
+
+    seen_slugs: dict[str, int] = {}
+    recipes = []
+
+    for row in rows:
+        name = row[0]
+        sensor = row[1]
+        if not name or not sensor:
+            continue
+        if not sensor_matches(sensor, sensor_filter):
+            continue
+
+        film_sim = parse_film_sim(row[7])
+        if not film_sim:
+            print(f"  skip: '{name}' — unknown film sim '{row[7]}'", file=sys.stderr)
+            continue
+
+        slug = slugify(str(name))
+        if slug in seen_slugs:
+            seen_slugs[slug] += 1
+            slug = f"{slug}-{seen_slugs[slug]}"
+        else:
+            seen_slugs[slug] = 1
+
+        grain, grain_size = parse_grain(row[16])
+        chrome = parse_chrome(row[17])
+        chrome_blue = parse_chrome(row[18])
+        wb_mode, wb_temp = parse_wb(row[19])
+        dr = parse_dr(row[8])
+
+        rec: dict = {
+            "name": str(name).strip(),
+            "slug": slug,
+            "film_sim": film_sim,
+        }
+
+        if dr is not None:
+            rec["dynamic_range"] = dr
+
+        for key, col in [
+            ("highlight", 9),
+            ("shadow", 10),
+            ("color", 11),
+            ("noise_reduction", 12),
+            ("sharpness", 13),
+            ("clarity", 14),
+        ]:
+            v = parse_num(row[col])
+            if v is not None:
+                rec[key] = v if v != int(v) else int(v)
+
+        if grain:
+            rec["grain"] = grain
+        if grain_size:
+            rec["grain_size"] = grain_size
+        if chrome and chrome != "off":
+            rec["chrome_effect"] = chrome
+        if chrome_blue and chrome_blue != "off":
+            rec["chrome_blue"] = chrome_blue
+
+        if wb_mode:
+            rec["white_balance"] = wb_mode
+        if wb_temp:
+            rec["wb_temp"] = wb_temp
+
+        wb_r = parse_int(row[20])
+        wb_b = parse_int(row[21])
+        if wb_r is not None:
+            rec["wb_shift_r"] = wb_r
+        if wb_b is not None:
+            rec["wb_shift_b"] = wb_b
+
+        iso = str(row[22]).strip() if row[22] else None
+        if iso:
+            rec["iso"] = iso
+        exposure = str(row[23]).strip() if row[23] else None
+        if exposure:
+            rec["exposure_comp"] = exposure
+
+        recipes.append(rec)
+
+    return recipes
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Build recipes.json from FXW spreadsheet"
+    )
+    parser.add_argument(
+        "--local", metavar="FILE", help="Use a local .xlsx instead of fetching"
+    )
+    parser.add_argument(
+        "--sensor",
+        default="IV,V",
+        help="Comma-separated sensor generations to include (default: IV,V)",
+    )
+    args = parser.parse_args()
+
+    sensor_filter = {s.strip() for s in args.sensor.split(",")}
+
+    if args.local:
+        xlsx_path = args.local
+    else:
+        xlsx_path = "/tmp/recipes.xlsx"
+        print(f"Fetching {XLSX_URL} ...")
+        urllib.request.urlretrieve(XLSX_URL, xlsx_path)
+        print(f"  saved to {xlsx_path}")
+
+    print(f"Parsing {xlsx_path} (sensors: {', '.join(sorted(sensor_filter))}) ...")
+    recipes = build(xlsx_path, sensor_filter)
+    print(f"  {len(recipes)} recipes extracted")
+
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(OUT_PATH, "w") as f:
+        json.dump(recipes, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+    print(f"Wrote {OUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()

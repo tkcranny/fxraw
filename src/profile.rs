@@ -34,6 +34,8 @@ use clap::ValueEnum;
 //     WhiteBalance (11). Default value 1 (ON) = use shooting condition's WB.
 
 const PROPS_OFFSET: usize = 0x201;
+const PROP_EXPOSURE_BIAS: usize = 4;
+const PROP_DYNAMIC_RANGE: usize = 5;
 const PROP_FILM_SIM: usize = 7;
 const PROP_GRAIN: usize = 8;
 const PROP_WB_SHOOT_COND: usize = 10;
@@ -231,6 +233,92 @@ fn encode_wb_shift(val: i32) -> u32 {
     val as u32
 }
 
+/// Parse exposure compensation from multiple notations:
+///   Decimal shorthand:  0, +1, -2, +0.3, -0.7, +1.3, -2.7
+///   Fraction notation:  +1/3, -2/3, +1 1/3, -2 2/3
+///
+/// The .3/.7 shorthand maps to 1/3 and 2/3 stops respectively,
+/// matching the notation used on Fujifilm dials and menus.
+pub fn parse_exposure_comp(s: &str) -> Result<i32, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty string".into());
+    }
+
+    let (neg, body) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest.trim())
+    } else if let Some(rest) = s.strip_prefix('+') {
+        (false, rest.trim())
+    } else {
+        (false, s)
+    };
+
+    let millis = if body.contains('.') {
+        // Decimal shorthand: "1.3" → 1333, "0.7" → 667
+        let dot = body.find('.').unwrap();
+        let whole: i32 = if dot == 0 {
+            0
+        } else {
+            body[..dot].parse().map_err(|_| format!("invalid number: {body}"))?
+        };
+        let frac_digit = &body[dot + 1..];
+        let frac = match frac_digit {
+            "0" => 0,
+            "3" => 333,
+            "7" => 667,
+            _ => return Err(format!("use .3 for 1/3 or .7 for 2/3 (got .{frac_digit})")),
+        };
+        whole * 1000 + frac
+    } else if body.contains('/') {
+        // Fraction notation: "1/3", "2/3", or "1 1/3", "2 2/3"
+        let parts: Vec<&str> = body.split_whitespace().collect();
+        let (whole, frac_str) = match parts.len() {
+            1 => (0i32, parts[0]),
+            2 => {
+                let w: i32 = parts[0].parse().map_err(|_| format!("invalid number: {}", parts[0]))?;
+                (w, parts[1])
+            }
+            _ => return Err(format!("cannot parse '{s}'")),
+        };
+        let frac = match frac_str {
+            "1/3" => 333,
+            "2/3" => 667,
+            other => return Err(format!("unsupported fraction: {other} (use 1/3 or 2/3)")),
+        };
+        whole * 1000 + frac
+    } else {
+        // Whole stops: "0", "1", "2", "3"
+        let w: i32 = body.parse().map_err(|_| format!("invalid number: {body}"))?;
+        w * 1000
+    };
+
+    if millis.abs() > 3000 {
+        return Err(format!("out of range: ±3 EV max"));
+    }
+
+    Ok(if neg { -millis } else { millis })
+}
+
+fn encode_exposure_comp(millis: i32) -> u32 {
+    millis as u32
+}
+
+fn format_ev(millis: i32) -> String {
+    let sign = if millis < 0 { "-" } else if millis > 0 { "+" } else { "" };
+    let abs = millis.abs();
+    let whole = abs / 1000;
+    let rem = abs % 1000;
+    match (whole, rem) {
+        (0, 0) => "0".into(),
+        (0, 333) => format!("{sign}1/3"),
+        (0, 667) => format!("{sign}2/3"),
+        (w, 0) => format!("{sign}{w}"),
+        (w, 333) => format!("{sign}{w} 1/3"),
+        (w, 667) => format!("{sign}{w} 2/3"),
+        _ => format!("{sign}{}.{:03}", whole, rem),
+    }
+}
+
 /// Encode white balance mode.
 fn encode_white_balance(mode: &str, _temp: Option<u32>) -> Option<u32> {
     match mode {
@@ -271,6 +359,9 @@ pub struct RecipeSettings {
     pub wb_shift_b: Option<i32>,
     pub chrome_effect: Option<ChromeLevel>,
     pub chrome_blue: Option<ChromeLevel>,
+    pub dynamic_range: Option<u32>,
+    /// Exposure compensation in millis (EV × 1000), e.g. 333 = +1/3 EV
+    pub exposure_comp: Option<i32>,
 }
 
 impl RecipeSettings {
@@ -289,6 +380,8 @@ impl RecipeSettings {
             && self.wb_shift_b.is_none()
             && self.chrome_effect.is_none()
             && self.chrome_blue.is_none()
+            && self.dynamic_range.is_none()
+            && self.exposure_comp.is_none()
     }
 
     pub fn summary(&self) -> String {
@@ -341,6 +434,12 @@ impl RecipeSettings {
         if let Some(cb) = self.chrome_blue {
             parts.push(format!("ChromeBlue: {cb:?}"));
         }
+        if let Some(dr) = self.dynamic_range {
+            parts.push(format!("DR{dr}"));
+        }
+        if let Some(millis) = self.exposure_comp {
+            parts.push(format!("EV: {}", format_ev(millis)));
+        }
         if parts.is_empty() {
             "camera defaults".to_string()
         } else {
@@ -353,12 +452,16 @@ impl RecipeSettings {
         &mut self,
         film_sim: Option<FilmSimulation>,
         grain: Option<GrainEffect>,
+        exposure_comp: Option<i32>,
     ) {
         if let Some(fs) = film_sim {
             self.film_sim = Some(fs);
         }
         if let Some(g) = grain {
             self.grain = Some(g);
+        }
+        if let Some(ev) = exposure_comp {
+            self.exposure_comp = Some(ev);
         }
     }
 }
@@ -405,6 +508,24 @@ pub fn apply_recipe(profile: &mut Vec<u8>, settings: &RecipeSettings) -> String 
         }};
     }
 
+    if let Some(dr) = settings.dynamic_range {
+        set_prop!("DynamicRange", PROP_DYNAMIC_RANGE, dr);
+    }
+    if let Some(ev) = settings.exposure_comp {
+        // The camera limits negative EV based on DynamicRange:
+        //   DR100 → -3 EV min, DR200 → -3 EV min, DR400 → -2 EV min
+        // Values beyond the limit are silently ignored by the firmware.
+        let dr = read_prop(profile, PROP_DYNAMIC_RANGE).unwrap_or(100);
+        let min_ev = if dr >= 400 { -2000 } else { -3000 };
+        let clamped = ev.max(min_ev);
+        if clamped != ev {
+            changes.push(format!(
+                "  ExposureBias clamped {} -> {} (DR{} limits negative EV to {})",
+                format_ev(ev), format_ev(clamped), dr, format_ev(min_ev)
+            ));
+        }
+        set_prop!("ExposureBias", PROP_EXPOSURE_BIAS, encode_exposure_comp(clamped));
+    }
     if let Some(sim) = settings.film_sim {
         set_prop!("FilmSim", PROP_FILM_SIM, sim.to_d185());
     }
@@ -542,5 +663,75 @@ pub fn current_film_sim(profile: &[u8]) -> String {
             format!("{name} (0x{v:X})")
         }
         None => "unreadable".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_exposure_comp_fractions() {
+        assert_eq!(parse_exposure_comp("0").unwrap(), 0);
+        assert_eq!(parse_exposure_comp("+1/3").unwrap(), 333);
+        assert_eq!(parse_exposure_comp("-1/3").unwrap(), -333);
+        assert_eq!(parse_exposure_comp("+2/3").unwrap(), 667);
+        assert_eq!(parse_exposure_comp("-2/3").unwrap(), -667);
+        assert_eq!(parse_exposure_comp("+1").unwrap(), 1000);
+        assert_eq!(parse_exposure_comp("-1").unwrap(), -1000);
+        assert_eq!(parse_exposure_comp("+1 1/3").unwrap(), 1333);
+        assert_eq!(parse_exposure_comp("-1 2/3").unwrap(), -1667);
+        assert_eq!(parse_exposure_comp("+2").unwrap(), 2000);
+        assert_eq!(parse_exposure_comp("-3").unwrap(), -3000);
+        assert_eq!(parse_exposure_comp("+2 2/3").unwrap(), 2667);
+        assert_eq!(parse_exposure_comp("1/3").unwrap(), 333);
+        assert_eq!(parse_exposure_comp("2").unwrap(), 2000);
+    }
+
+    #[test]
+    fn test_parse_exposure_comp_decimal_shorthand() {
+        assert_eq!(parse_exposure_comp("+0.3").unwrap(), 333);
+        assert_eq!(parse_exposure_comp("-0.3").unwrap(), -333);
+        assert_eq!(parse_exposure_comp("+0.7").unwrap(), 667);
+        assert_eq!(parse_exposure_comp("-0.7").unwrap(), -667);
+        assert_eq!(parse_exposure_comp("+1.3").unwrap(), 1333);
+        assert_eq!(parse_exposure_comp("-1.7").unwrap(), -1667);
+        assert_eq!(parse_exposure_comp("+2.3").unwrap(), 2333);
+        assert_eq!(parse_exposure_comp("-2.7").unwrap(), -2667);
+        assert_eq!(parse_exposure_comp("1.0").unwrap(), 1000);
+        assert_eq!(parse_exposure_comp(".3").unwrap(), 333);
+        assert_eq!(parse_exposure_comp("-.7").unwrap(), -667);
+    }
+
+    #[test]
+    fn test_parse_exposure_comp_errors() {
+        assert!(parse_exposure_comp("+4").is_err());
+        assert!(parse_exposure_comp("abc").is_err());
+        assert!(parse_exposure_comp("+1 3/4").is_err());
+        assert!(parse_exposure_comp("+1.5").is_err());
+        assert!(parse_exposure_comp("").is_err());
+    }
+
+    #[test]
+    fn test_format_ev() {
+        assert_eq!(format_ev(0), "0");
+        assert_eq!(format_ev(333), "+1/3");
+        assert_eq!(format_ev(-333), "-1/3");
+        assert_eq!(format_ev(667), "+2/3");
+        assert_eq!(format_ev(-667), "-2/3");
+        assert_eq!(format_ev(1000), "+1");
+        assert_eq!(format_ev(-1000), "-1");
+        assert_eq!(format_ev(1333), "+1 1/3");
+        assert_eq!(format_ev(-2667), "-2 2/3");
+        assert_eq!(format_ev(3000), "+3");
+    }
+
+    #[test]
+    fn test_encode_exposure_comp_twos_complement() {
+        assert_eq!(encode_exposure_comp(0), 0);
+        assert_eq!(encode_exposure_comp(333), 333);
+        assert_eq!(encode_exposure_comp(-333), 0xfffffeb3);
+        assert_eq!(encode_exposure_comp(-1000), 0xfffffc18);
+        assert_eq!(encode_exposure_comp(3000), 3000);
     }
 }

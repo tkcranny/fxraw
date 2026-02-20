@@ -35,6 +35,8 @@ pub struct Recipe {
     #[serde(default)]
     pub chrome_blue: Option<String>,
     #[serde(default)]
+    pub dynamic_range: Option<u32>,
+    #[serde(default)]
     pub white_balance: Option<String>,
     #[serde(default)]
     pub wb_temp: Option<u32>,
@@ -42,6 +44,10 @@ pub struct Recipe {
     pub wb_shift_r: Option<f64>,
     #[serde(default)]
     pub wb_shift_b: Option<f64>,
+    #[serde(default)]
+    pub iso: Option<String>,
+    #[serde(default)]
+    pub exposure_comp: Option<String>,
 }
 
 impl Recipe {
@@ -113,6 +119,8 @@ impl Recipe {
             wb_shift_b: self.wb_shift_b.map(|v| v as i32),
             chrome_effect: Self::parse_chrome(&self.chrome_effect),
             chrome_blue: Self::parse_chrome(&self.chrome_blue),
+            dynamic_range: self.dynamic_range,
+            exposure_comp: None,
         }
     }
 }
@@ -143,4 +151,64 @@ pub fn list_recipes() {
             r.film_sim
         );
     }
+}
+
+pub fn show_recipe(r: &Recipe) {
+    println!("{}", r.name);
+    println!("{}", "─".repeat(r.name.len()));
+
+    let row = |label: &str, val: String| {
+        println!("  {:<18} {}", label, val);
+    };
+
+    row("Slug", r.slug.clone());
+    row("Film Simulation", r.film_sim.clone());
+    row("Dynamic Range", match r.dynamic_range {
+        Some(dr) => format!("DR{dr}"),
+        None => "auto".into(),
+    });
+
+    // Grain: "weak / small" or "off"
+    let grain = match r.grain.as_deref() {
+        Some(g) => {
+            let size = r.grain_size.as_deref().unwrap_or("small");
+            format!("{g} / {size}")
+        }
+        None => "off".into(),
+    };
+    row("Grain", grain);
+
+    // Color Chrome + Blue on one line
+    let chrome = r.chrome_effect.as_deref().unwrap_or("off");
+    let chrome_b = r.chrome_blue.as_deref().unwrap_or("off");
+    row("Color Effect", format!("chrome:{chrome}  blue:{chrome_b}"));
+
+    // WB on one line: base + R/B shifts
+    let wb_base = match (r.white_balance.as_deref(), r.wb_temp) {
+        (Some("temperature"), Some(t)) => format!("{t}K"),
+        (Some(wb), _) => wb.to_string(),
+        (None, _) => "auto".into(),
+    };
+    let shift_r = r.wb_shift_r.map(|v| format!("{v:+}")).unwrap_or("0".into());
+    let shift_b = r.wb_shift_b.map(|v| format!("{v:+}")).unwrap_or("0".into());
+    row("White Balance", format!("{wb_base}  R:{shift_r} B:{shift_b}"));
+
+    let fmt = |v: f64| -> String {
+        if v == 0.0 { "0".into() } else { format!("{v:+}") }
+    };
+
+    // Tone: highlight & shadow on one line
+    let hl = r.highlight.map(|v| fmt(v)).unwrap_or("0".into());
+    let sh = r.shadow.map(|v| fmt(v)).unwrap_or("0".into());
+    row("Tone", format!("highlight:{hl}  shadow:{sh}"));
+
+    let fmti = |v: f64| -> String {
+        if v == 0.0 { "0".into() } else { format!("{:+}", v as i32) }
+    };
+    row("Color", r.color.map(|v| fmti(v)).unwrap_or("0".into()));
+    row("Sharpness", r.sharpness.map(|v| fmti(v)).unwrap_or("0".into()));
+    row("NR", r.noise_reduction.map(|v| fmti(v)).unwrap_or("0".into()));
+    row("Clarity", r.clarity.map(|v| fmti(v)).unwrap_or("0".into()));
+    row("ISO", r.iso.clone().unwrap_or("auto".into()));
+    row("Exposure", r.exposure_comp.clone().unwrap_or("0".into()));
 }
