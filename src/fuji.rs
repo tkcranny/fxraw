@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::profile::{self, RecipeSettings};
 use crate::ptp::{self, PtpCamera, RC_OK};
 use std::fs;
 use std::path::Path;
@@ -146,7 +147,7 @@ pub fn probe() {
 // convert – process a RAF file through the camera
 // ---------------------------------------------------------------------------
 
-pub fn convert(input: &str, output: Option<&str>) {
+pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
     let input_path = Path::new(input);
     if !input_path.exists() {
         eprintln!("Error: file not found: {input}");
@@ -280,14 +281,13 @@ pub fn convert(input: &str, output: Option<&str>) {
     }
 
     // ------------------------------------------------------------------
-    // Step C/D: Get and set the development profile (0xD185)
-    // For now, read the camera defaults and set them back unchanged
-    // (equivalent to "use camera settings" in X RAW Studio)
+    // Step C/D: Get development profile, apply recipe, set it back
     // ------------------------------------------------------------------
     println!("\n[4/7] Reading development profile (0xD185)...");
-    let profile = match camera.get_device_prop_value(FUJI_PROP_RAW_CONV_PROFILE) {
+    let mut profile_data = match camera.get_device_prop_value(FUJI_PROP_RAW_CONV_PROFILE) {
         Ok(data) => {
             println!("  Got {} bytes of profile data", data.len());
+            println!("  Current film sim: {}", profile::current_film_sim(&data));
             data
         }
         Err(e) => {
@@ -297,9 +297,15 @@ pub fn convert(input: &str, output: Option<&str>) {
         }
     };
 
-    if !profile.is_empty() {
+    if !profile_data.is_empty() {
+        if !recipe.is_empty() {
+            println!("\n  Applying recipe: {}", recipe.summary());
+            let changes = profile::apply_recipe(&mut profile_data, recipe);
+            println!("  {changes}");
+        }
+
         println!("\n[5/7] Setting development profile (0xD185)...");
-        match camera.set_device_prop_value(FUJI_PROP_RAW_CONV_PROFILE, &profile) {
+        match camera.set_device_prop_value(FUJI_PROP_RAW_CONV_PROFILE, &profile_data) {
             Ok(()) => println!("  -> OK"),
             Err(e) => eprintln!("  Warning: could not set profile: {e}"),
         }

@@ -29,18 +29,25 @@ This is the key step for reverse-engineering the RAW conversion protocol.
 cargo run -- probe
 ```
 
-### convert (work in progress)
+### convert
 
 Convert a RAF file to JPEG using the camera's image processor.
 
 ```
 cargo run -- convert photo.raf
 cargo run -- convert photo.raf -o output.jpg
+cargo run -- convert photo.raf -f acros -g weak -o acros.jpg
 ```
 
-This command is not yet functional. It requires the Fujifilm vendor PTP
-protocol used by X RAW Studio, which needs to be captured via USB traffic
-analysis. See "Reverse-engineering the protocol" below.
+#### Recipe options
+
+| Flag | Values |
+|------|--------|
+| `-f, --film-sim` | provia, velvia, astia, classic-chrome, classic-neg, pro-neg-hi, pro-neg-std, eterna, eterna-bleach-bypass, acros, acros-ye, acros-r, acros-g, monochrome, monochrome-ye, monochrome-r, monochrome-g, sepia, nostalgic-neg, reala-ace |
+| `-g, --grain` | off, weak, strong |
+
+Without recipe flags the camera's current settings are used (same as
+X RAW Studio's default behaviour).
 
 ## Camera setup
 
@@ -65,8 +72,9 @@ processes a RAF file:
 
 ```
 src/
-  main.rs    CLI entry point (detect / probe / convert)
-  detect.rs  USB device scanning
-  ptp.rs     PTP-over-USB protocol layer
-  fuji.rs    Fujifilm-specific PTP operations
+  main.rs     CLI entry point (detect / probe / convert)
+  detect.rs   USB device scanning
+  ptp.rs      PTP-over-USB protocol layer
+  fuji.rs     Fujifilm-specific PTP operations
+  profile.rs  D185 profile parsing and recipe settings
 ```
