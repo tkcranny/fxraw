@@ -414,6 +414,7 @@ fn open_camera() -> PtpCamera {
         eprintln!("  - The camera is connected via USB and turned on");
         eprintln!("  - No other app (Photos, Image Capture) is using it");
         eprintln!("  - USB mode is set correctly on the camera");
+        eprintln!("  - You have run `sudo fjx setup` (one-time macOS PTP daemon fix)");
         std::process::exit(1);
     })
 }

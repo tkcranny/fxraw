@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
 use rusb::{Context, DeviceHandle, Direction, TransferType, UsbContext};
-use std::time::Duration;
 use std::process::Command;
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // PTP container types and header
@@ -167,58 +167,28 @@ impl PtpCamera {
                 _ => return Err("No bulk endpoints found on device".into()),
             };
 
-            // On macOS, the system PTP daemon (ptpcamerad) auto-claims the
-            // camera interface. We retry several times, killing the daemon
-            // before each attempt so we can race to claim it first.
-            let max_retries = 5;
-            let mut last_err = String::new();
+            let handle = match device.open() {
+                Ok(h) => h,
+                Err(e) => return Err(format!("Cannot open USB device: {e}")),
+            };
 
-            for attempt in 0..max_retries {
-                if attempt > 0 {
-                    kill_macos_ptp_daemons();
-                    std::thread::sleep(Duration::from_millis(200));
+            let _ = handle.set_auto_detach_kernel_driver(true);
+
+            match handle.claim_interface(iface_num) {
+                Ok(()) => {
+                    return Ok(PtpCamera {
+                        handle,
+                        ep_in,
+                        ep_out,
+                        iface: iface_num,
+                        transaction_id: 0,
+                        timeout: Duration::from_secs(5),
+                    });
                 }
-
-                let handle = match device.open() {
-                    Ok(h) => h,
-                    Err(e) => {
-                        last_err = format!("Cannot open USB device: {e}");
-                        continue;
-                    }
-                };
-
-                let _ = handle.set_auto_detach_kernel_driver(true);
-                let _ = handle.detach_kernel_driver(iface_num);
-
-                match handle.claim_interface(iface_num) {
-                    Ok(()) => {
-                        return Ok(PtpCamera {
-                            handle,
-                            ep_in,
-                            ep_out,
-                            iface: iface_num,
-                            transaction_id: 0,
-                            timeout: Duration::from_secs(5),
-                        });
-                    }
-                    Err(e) => {
-                        last_err = format!(
-                            "Cannot claim interface {iface_num}: {e}. \
-                             Is another app (Photos, Image Capture) using the camera?"
-                        );
-                        if attempt == 0 {
-                            eprintln!(
-                                "  Interface claimed by another process, \
-                                 attempting to release (retry {}/{})...",
-                                attempt + 1,
-                                max_retries
-                            );
-                        }
-                    }
+                Err(e) => {
+                    return Err(claim_interface_error(iface_num, e));
                 }
             }
-
-            return Err(last_err);
         }
 
         Err(format!(
@@ -529,11 +499,87 @@ impl PtpCamera {
 // macOS PTP daemon management
 // ---------------------------------------------------------------------------
 
-/// Kill macOS system daemons that auto-claim PTP camera interfaces.
-fn kill_macos_ptp_daemons() {
-    for name in &["ptpcamerad", "mscamerad-xpc"] {
+const PTP_DAEMONS: &[&str] = &["ptpcamerad", "mscamerad-xpc"];
+
+fn claim_interface_error(iface: u8, e: rusb::Error) -> String {
+    if cfg!(target_os = "macos") && is_ptp_daemon_running() {
+        format!(
+            "Cannot claim interface {iface}: {e}\n\n\
+             macOS system daemon `ptpcamerad` has claimed this camera.\n\
+             Run this once to permanently disable it:\n\n\
+             \x20   sudo fjx setup\n\n\
+             (You can re-enable it later with `sudo fjx setup --undo`.)"
+        )
+    } else {
+        format!(
+            "Cannot claim interface {iface}: {e}. \
+             Is another app (Photos, Image Capture) using the camera?"
+        )
+    }
+}
+
+fn is_ptp_daemon_running() -> bool {
+    for name in PTP_DAEMONS {
+        if let Ok(output) = Command::new("pgrep").arg("-x").arg(name).output() {
+            if output.status.success() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Disable macOS PTP daemons so they stop auto-claiming cameras.
+/// Returns Ok(message) on success. Requires root.
+pub fn disable_ptp_daemons() -> Result<String, String> {
+    let mut disabled = Vec::new();
+    for name in PTP_DAEMONS {
+        let service = format!("system/com.apple.{name}");
+        let status = Command::new("launchctl")
+            .args(["disable", &service])
+            .status()
+            .map_err(|e| format!("Failed to run launchctl: {e}"))?;
+        if status.success() {
+            disabled.push(service.clone());
+        }
+        let _ = Command::new("launchctl")
+            .args(["bootout", &service])
+            .status();
         let _ = Command::new("killall").arg(name).output();
     }
+    if disabled.is_empty() {
+        return Err(
+            "No PTP services were disabled. Are you running with sudo?".into(),
+        );
+    }
+    Ok(format!(
+        "Disabled: {}\n\nReconnect the camera USB cable, then run `fjx convert` as normal (no sudo).",
+        disabled.join(", ")
+    ))
+}
+
+/// Re-enable macOS PTP daemons. Requires root.
+pub fn enable_ptp_daemons() -> Result<String, String> {
+    let mut enabled = Vec::new();
+    for name in PTP_DAEMONS {
+        let service = format!("system/com.apple.{name}");
+        let status = Command::new("launchctl")
+            .args(["enable", &service])
+            .status()
+            .map_err(|e| format!("Failed to run launchctl: {e}"))?;
+        if status.success() {
+            enabled.push(service.clone());
+        }
+    }
+    if enabled.is_empty() {
+        return Err(
+            "No PTP services were enabled. Are you running with sudo?".into(),
+        );
+    }
+    Ok(format!(
+        "Re-enabled: {}\n\nThe PTP daemons will start again on the next USB camera connection.",
+        enabled.join(", ")
+    ))
 }
 
 // ---------------------------------------------------------------------------

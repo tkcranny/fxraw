@@ -37,6 +37,13 @@ enum Commands {
         file: String,
     },
 
+    /// Disable macOS PTP daemons so the camera can be used without sudo (requires sudo, one-time)
+    Setup {
+        /// Re-enable the PTP daemons (undo a previous setup)
+        #[arg(long)]
+        undo: bool,
+    },
+
     /// Convert a RAF file to JPEG using the camera's image processor
     Convert {
         /// Path to the input RAF file
@@ -84,6 +91,20 @@ fn main() {
             }
         }
         Commands::Analyse { file } => analyse::run(&file),
+        Commands::Setup { undo } => {
+            let result = if undo {
+                ptp::enable_ptp_daemons()
+            } else {
+                ptp::disable_ptp_daemons()
+            };
+            match result {
+                Ok(msg) => println!("{msg}"),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Commands::Convert {
             input,
             output,

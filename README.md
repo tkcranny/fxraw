@@ -88,6 +88,23 @@ Without any recipe or override flags the camera's current settings are used
 2. Turn the camera on.
 3. Go to **Menu > Connection Setting > Connection Mode** and set it to **USB**.
 
+### One-time macOS setup (disabling ptpcamerad)
+
+macOS automatically runs a system daemon (`ptpcamerad`) that claims every PTP
+camera. This blocks `fjx` from communicating with the camera over USB.
+
+Run this once to permanently disable the daemon:
+
+```
+sudo cargo run -- setup
+```
+
+After that, all `fjx` commands work without `sudo`. To undo this later:
+
+```
+sudo cargo run -- setup --undo
+```
+
 ## Reverse-engineering the protocol
 
 The `probe` command dumps all PTP operations and properties the camera
