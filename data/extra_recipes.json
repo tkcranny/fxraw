@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Classic Cuban Neg",
+    "slug": "classic-cuban-neg",
+    "film_sim": "classic-neg",
+    "dynamic_range": 400,
+    "highlight": -2,
+    "shadow": 1,
+    "color": 4,
+    "noise_reduction": -4,
+    "sharpness": 0,
+    "clarity": -4,
+    "grain": "strong",
+    "grain_size": "large",
+    "chrome_effect": "strong",
+    "chrome_blue": "strong",
+    "white_balance": "auto",
+    "wb_shift_r": 4,
+    "wb_shift_b": -5,
+    "iso": "Auto, ISO 500 up to ISO 6400"
+  }
+]

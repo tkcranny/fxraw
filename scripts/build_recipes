@@ -22,7 +22,9 @@ from pathlib import Path
 import openpyxl
 
 XLSX_URL = "https://fxwapp.s3.amazonaws.com/FXW+App+Recipes.xlsx"
-OUT_PATH = Path(__file__).resolve().parent.parent / "data" / "recipes.json"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+OUT_PATH = DATA_DIR / "recipes.json"
+EXTRA_PATH = DATA_DIR / "extra_recipes.json"
 
 # ── Mapping tables ──────────────────────────────────────────────────────────
 
@@ -274,12 +276,24 @@ def main():
     recipes = build(xlsx_path, sensor_filter)
     print(f"  {len(recipes)} recipes extracted")
 
+    if EXTRA_PATH.exists():
+        with open(EXTRA_PATH) as f:
+            extras = json.load(f)
+        existing_slugs = {r["slug"] for r in recipes}
+        added = 0
+        for r in extras:
+            if r["slug"] not in existing_slugs:
+                recipes.append(r)
+                added += 1
+        recipes.sort(key=lambda r: r["slug"])
+        print(f"  {added} extra recipe(s) merged from {EXTRA_PATH.name}")
+
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(OUT_PATH, "w") as f:
         json.dump(recipes, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
-    print(f"Wrote {OUT_PATH}")
+    print(f"Wrote {OUT_PATH} ({len(recipes)} total)")
 
 
 if __name__ == "__main__":

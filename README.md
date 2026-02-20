@@ -39,7 +39,8 @@ cargo run -- recipes
 
 ### convert
 
-Convert a RAF file to JPEG using the camera's image processor.
+Convert one or more RAF files to JPEG using the camera's image processor.
+When multiple files are given, the camera session is opened once and reused.
 
 ```
 cargo run -- convert photo.raf
@@ -47,13 +48,15 @@ cargo run -- convert photo.raf -o output.jpg
 cargo run -- convert photo.raf -r kodak-tri-x-400
 cargo run -- convert photo.raf -r "kodak gold" -o gold.jpg
 cargo run -- convert photo.raf -f acros -g weak -o acros.jpg
+cargo run -- convert *.raf -r portra-400
+cargo run -- convert *.raf -r classic-chrome -o jpegs/
 ```
 
 #### Options
 
 | Flag | Description |
 |------|-------------|
-| `-o, --output <PATH>` | Output JPEG path (defaults to `<input>.jpg`) |
+| `-o, --output <PATH>` | Output JPEG path or directory (created if needed; defaults to `<input>-<recipe>.jpg`) |
 | `-r, --recipe <NAME>` | Use a built-in recipe preset (exact slug or partial match on slug/name) |
 | `-f, --film-sim <SIM>` | Film simulation override (takes priority over recipe) |
 | `-g, --grain <LEVEL>` | Grain effect override (takes priority over recipe) |

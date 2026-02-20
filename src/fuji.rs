@@ -147,45 +147,35 @@ pub fn probe() {
 // convert – process a RAF file through the camera
 // ---------------------------------------------------------------------------
 
-pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
-    let input_path = Path::new(input);
-    if !input_path.exists() {
-        eprintln!("Error: file not found: {input}");
-        std::process::exit(1);
-    }
-
-    let output_path = match output {
-        Some(p) => p.to_string(),
-        None => {
-            let stem = input_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("output");
-            format!("{stem}.jpg")
+pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings) {
+    // Validate all inputs up-front before touching the camera
+    let mut validated: Vec<(&str, &str, Vec<u8>)> = Vec::with_capacity(jobs.len());
+    for (input, output) in jobs {
+        let input_path = Path::new(input);
+        if !input_path.exists() {
+            eprintln!("Error: file not found: {input}");
+            std::process::exit(1);
         }
-    };
-
-    println!("Input:  {input}");
-    println!("Output: {output_path}");
-
-    // Read and validate the RAF file
-    let raf_data = fs::read(input).unwrap_or_else(|e| {
-        eprintln!("Error reading {input}: {e}");
-        std::process::exit(1);
-    });
-
-    if raf_data.len() < 16 || &raf_data[..15] != b"FUJIFILMCCD-RAW" {
-        eprintln!("Error: {input} does not appear to be a valid Fujifilm RAF file.");
-        std::process::exit(1);
+        let raf_data = fs::read(input).unwrap_or_else(|e| {
+            eprintln!("Error reading {input}: {e}");
+            std::process::exit(1);
+        });
+        if raf_data.len() < 16 || &raf_data[..15] != b"FUJIFILMCCD-RAW" {
+            eprintln!("Error: {input} does not appear to be a valid Fujifilm RAF file.");
+            std::process::exit(1);
+        }
+        validated.push((input, output, raf_data));
     }
 
-    let raf_size_mb = raf_data.len() as f64 / (1024.0 * 1024.0);
-    println!("RAF:    {:.1} MB\n", raf_size_mb);
+    let total = validated.len();
+    if total > 1 {
+        println!("Converting {total} files\n");
+    }
 
     // ------------------------------------------------------------------
-    // Connect & open session
+    // Connect & open session (once for the whole batch)
     // ------------------------------------------------------------------
-    println!("[1/7] Connecting to camera...");
+    println!("[connect] Connecting to camera...");
     let mut camera = open_camera();
     camera.open_session().unwrap_or_else(|e| {
         eprintln!("  Failed to open session: {e}");
@@ -201,17 +191,11 @@ pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
         info.manufacturer, info.model, info.device_version
     );
 
-    // ------------------------------------------------------------------
     // Check USB mode (0xD16E should be 6 for RAW CONV)
-    // ------------------------------------------------------------------
-    // Note: on some models 0xD16E is the USB/connection mode. Fudge expects value 6.
-    // Our probe labels 0xD16E as "ColorSpace" but it reads 6, which matches RAW CONV mode.
-    // If the camera is NOT in RAW CONV mode, the user must set it via:
-    //   Menu -> Connection Setting -> Connection Mode -> USB RAW CONV./BACKUP RESTORE
     match camera.get_device_prop_value(0xD16E) {
         Ok(data) if data.len() >= 2 => {
             let mode = u16::from_le_bytes([data[0], data[1]]);
-            println!("  Property 0xD16E = {} (expect 6 for RAW CONV mode)", mode);
+            println!("  USB mode = {} (expect 6 for RAW CONV)", mode);
             if mode != 6 {
                 eprintln!("\n  WARNING: Camera may not be in RAW CONV mode.");
                 eprintln!(
@@ -224,66 +208,89 @@ pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
     }
 
     // ------------------------------------------------------------------
-    // Step A: Send ObjectInfo via 0x900C
-    // Per PROTOCOL.md: params=(0,0,0), data=ObjectInfo with format 0xF802,
-    // filename "FUP_FILE.dat", size = RAF file length
+    // Process each file
     // ------------------------------------------------------------------
-    println!("\n[2/7] Sending ObjectInfo (0x900C)...");
+    let mut succeeded = 0u32;
+    let mut failed = 0u32;
+
+    for (idx, (input, output, raf_data)) in validated.iter().enumerate() {
+        let file_num = idx + 1;
+        let raf_size_mb = raf_data.len() as f64 / (1024.0 * 1024.0);
+
+        if total > 1 {
+            println!("\n{}", "=".repeat(60));
+            println!("[{file_num}/{total}] {input}");
+            println!("{}", "=".repeat(60));
+        }
+        println!("Input:  {input}");
+        println!("Output: {output}");
+        println!("RAF:    {:.1} MB\n", raf_size_mb);
+
+        match convert_one(&mut camera, raf_data, raf_size_mb, output, recipe) {
+            Ok(()) => {
+                succeeded += 1;
+                println!("\n  Conversion complete!");
+            }
+            Err(e) => {
+                failed += 1;
+                eprintln!("\n  FAILED: {e}");
+                if failed > 0 && file_num < total {
+                    eprintln!("  Continuing with next file...");
+                }
+            }
+        }
+    }
+
+    let _ = camera.close_session();
+
+    if total > 1 {
+        println!("\n{} succeeded, {} failed out of {} files.", succeeded, failed, total);
+    }
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+/// Process a single RAF through the camera. Returns Err on failure so the
+/// caller can continue with the next file instead of aborting.
+fn convert_one(
+    camera: &mut PtpCamera,
+    raf_data: &[u8],
+    raf_size_mb: f64,
+    output_path: &str,
+    recipe: &RecipeSettings,
+) -> Result<(), String> {
+    // Step A: Send ObjectInfo via 0x900C
+    println!("[1/6] Sending ObjectInfo (0x900C)...");
     let obj_info = ptp::build_object_info(
-        PTP_OFC_FUJI_RAW_UPLOAD, // 0xF802, NOT 0xB103
+        PTP_OFC_FUJI_RAW_UPLOAD,
         raf_data.len() as u32,
         "FUP_FILE.dat",
     );
-    println!(
-        "  Format: 0x{:04X}, Size: {}, Filename: FUP_FILE.dat",
-        PTP_OFC_FUJI_RAW_UPLOAD,
-        raf_data.len()
-    );
-    let resp = camera
-        .vendor_send(FUJI_OC_SEND_OBJECT_INFO, &[0, 0, 0], &obj_info)
-        .unwrap_or_else(|e| {
-            eprintln!("  USB error: {e}");
-            std::process::exit(1);
-        });
+    let resp = camera.vendor_send(FUJI_OC_SEND_OBJECT_INFO, &[0, 0, 0], &obj_info)?;
     println!(
         "  -> 0x{:04X} ({})",
         resp.code,
         ptp::response_name(resp.code)
     );
     if resp.code != RC_OK {
-        eprintln!("  0x900C failed. Is the camera in USB RAW CONV mode?");
-        let _ = camera.close_session();
-        std::process::exit(1);
+        return Err("0x900C failed. Is the camera in USB RAW CONV mode?".into());
     }
 
-    // ------------------------------------------------------------------
-    // Step B: Send RAF file data via 0x900D (no params)
-    // ------------------------------------------------------------------
-    println!(
-        "\n[3/7] Uploading RAF ({:.1} MB via 0x900D)...",
-        raf_size_mb
-    );
-    let resp = camera
-        .vendor_send(FUJI_OC_SEND_OBJECT, &[], &raf_data)
-        .unwrap_or_else(|e| {
-            eprintln!("  USB error: {e}");
-            std::process::exit(1);
-        });
+    // Step B: Send RAF file data via 0x900D
+    println!("[2/6] Uploading RAF ({:.1} MB via 0x900D)...", raf_size_mb);
+    let resp = camera.vendor_send(FUJI_OC_SEND_OBJECT, &[], raf_data)?;
     println!(
         "  -> 0x{:04X} ({})",
         resp.code,
         ptp::response_name(resp.code)
     );
     if resp.code != RC_OK {
-        eprintln!("  0x900D failed.");
-        let _ = camera.close_session();
-        std::process::exit(1);
+        return Err("0x900D (SendObject) failed.".into());
     }
 
-    // ------------------------------------------------------------------
     // Step C/D: Get development profile, apply recipe, set it back
-    // ------------------------------------------------------------------
-    println!("\n[4/7] Reading development profile (0xD185)...");
+    println!("[3/6] Reading development profile (0xD185)...");
     let mut profile_data = match camera.get_device_prop_value(FUJI_PROP_RAW_CONV_PROFILE) {
         Ok(data) => {
             println!("  Got {} bytes of profile data", data.len());
@@ -305,41 +312,32 @@ pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
             println!("  {changes}");
         }
 
-        println!("\n[5/7] Setting development profile (0xD185)...");
+        println!("[4/6] Setting development profile (0xD185)...");
         match camera.set_device_prop_value(FUJI_PROP_RAW_CONV_PROFILE, &profile_data) {
             Ok(()) => println!("  -> OK"),
             Err(e) => eprintln!("  Warning: could not set profile: {e}"),
         }
     } else {
-        println!("\n[5/7] Skipping profile set (no profile data)");
+        println!("[4/6] Skipping profile set (no profile data)");
     }
 
-    // ------------------------------------------------------------------
     // Step E: Trigger conversion by setting 0xD183 = 0
-    // ------------------------------------------------------------------
-    println!("\n[6/7] Triggering RAW conversion (Set 0xD183 = 0)...");
+    println!("[5/6] Triggering RAW conversion (Set 0xD183 = 0)...");
     match camera.set_device_prop_value(FUJI_PROP_START_RAW_CONV, &0u32.to_le_bytes()) {
         Ok(()) => println!("  -> OK"),
         Err(e) => {
-            // Try as u16 in case the property is 16-bit
             println!("  u32 failed ({e}), trying u16...");
-            match camera.set_device_prop_value(FUJI_PROP_START_RAW_CONV, &0u16.to_le_bytes()) {
-                Ok(()) => println!("  -> OK (u16)"),
-                Err(e2) => {
-                    eprintln!("  Failed to trigger conversion: {e2}");
-                    let _ = camera.close_session();
-                    std::process::exit(1);
-                }
-            }
+            camera
+                .set_device_prop_value(FUJI_PROP_START_RAW_CONV, &0u16.to_le_bytes())
+                .map_err(|e2| format!("Failed to trigger conversion: {e2}"))?;
+            println!("  -> OK (u16)");
         }
     }
 
-    // ------------------------------------------------------------------
     // Step F/G: Poll GetObjectHandles until the JPEG appears, then download
-    // ------------------------------------------------------------------
-    println!("\n[7/7] Waiting for converted image...");
+    println!("[6/6] Waiting for converted image...");
     let poll_interval = std::time::Duration::from_secs(2);
-    let max_polls = 45; // up to 90 seconds
+    let max_polls = 45;
 
     for attempt in 1..=max_polls {
         std::thread::sleep(poll_interval);
@@ -349,7 +347,6 @@ pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
             Ok(handles) if !handles.is_empty() => {
                 println!("found {} object(s): {:08X?}", handles.len(), handles);
 
-                // Download the first (usually only) object
                 let handle = handles[0];
                 println!("  Downloading object 0x{handle:08X}...");
                 match camera.get_object(handle) {
@@ -357,7 +354,6 @@ pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
                         let size_mb = data.len() as f64 / (1024.0 * 1024.0);
                         println!("  Got {:.1} MB", size_mb);
 
-                        // Verify JPEG
                         if data.len() >= 2 && data[0] == 0xFF && data[1] == 0xD8 {
                             println!("  JPEG signature verified!");
                         } else {
@@ -365,42 +361,32 @@ pub fn convert(input: &str, output: Option<&str>, recipe: &RecipeSettings) {
                             print_hex_dump(&data, 64);
                         }
 
-                        // Save
-                        fs::write(&output_path, &data).unwrap_or_else(|e| {
+                        fs::write(output_path, &data).unwrap_or_else(|e| {
                             eprintln!("  Error writing {output_path}: {e}");
                             std::process::exit(1);
                         });
                         println!("\n  Saved: {output_path} ({:.1} MB)", size_mb);
 
-                        // Clean up: delete the object from the camera
                         println!("  Cleaning up (DeleteObject)...");
                         match camera.delete_object(handle) {
                             Ok(_) => println!("  Object deleted."),
                             Err(e) => println!("  Could not delete object: {e}"),
                         }
 
-                        let _ = camera.close_session();
-                        println!("\nConversion complete!");
-                        return;
+                        return Ok(());
                     }
                     Err(e) => {
                         println!("  GetObject failed: {e}");
                     }
                 }
             }
-            Ok(_) => print!("no objects yet\n"),
-            Err(e) => print!("error: {e}\n"),
+            Ok(_) => println!("no objects yet"),
+            Err(e) => println!("error: {e}"),
         }
     }
 
-    eprintln!("\nTimed out waiting for the camera to produce the converted image.");
-    eprintln!("The camera may not be in USB RAW CONV mode.");
-    eprintln!("Set: Connection Setting -> Connection Mode -> USB RAW CONV./BACKUP RESTORE");
-    let _ = camera.close_session();
-    std::process::exit(1);
+    Err("Timed out waiting for the camera to produce the converted image.".into())
 }
-
-// (no separate protocol variants – convert() implements the documented sequence directly)
 
 // ---------------------------------------------------------------------------
 // Helpers

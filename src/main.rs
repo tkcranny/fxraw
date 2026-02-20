@@ -44,12 +44,13 @@ enum Commands {
         undo: bool,
     },
 
-    /// Convert a RAF file to JPEG using the camera's image processor
+    /// Convert one or more RAF files to JPEG using the camera's image processor
     Convert {
-        /// Path to the input RAF file
-        input: String,
+        /// Path(s) to the input RAF file(s)
+        #[arg(required = true)]
+        inputs: Vec<String>,
 
-        /// Path for the output JPEG (defaults to <input>.jpg)
+        /// Output JPEG path or directory (directory is created if needed; defaults to <input>-<suffix>.jpg)
         #[arg(short, long)]
         output: Option<String>,
 
@@ -106,7 +107,7 @@ fn main() {
             }
         }
         Commands::Convert {
-            input,
+            inputs,
             output,
             recipe,
             film_sim,
@@ -139,15 +140,63 @@ fn main() {
 
             settings.merge_cli(film_sim, grain, ev);
 
-            let output = output.unwrap_or_else(|| {
-                let stem = std::path::Path::new(&input)
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy();
-                let suffix = recipe.as_deref().unwrap_or("converted");
-                format!("{stem}-{suffix}.jpg")
+            let suffix = recipe.as_deref().unwrap_or("converted");
+
+            // Determine whether -o is a directory, a file path, or absent.
+            let out_dir: Option<std::path::PathBuf> = output.as_ref().and_then(|o| {
+                let p = std::path::Path::new(o);
+                if p.is_dir() || o.ends_with('/') || o.ends_with(std::path::MAIN_SEPARATOR) || inputs.len() > 1 {
+                    Some(p.to_path_buf())
+                } else {
+                    None
+                }
             });
-            fuji::convert(&input, Some(&output), &settings);
+
+            // Create the output directory if needed.
+            if let Some(ref dir) = out_dir {
+                if !dir.exists() {
+                    std::fs::create_dir_all(dir).unwrap_or_else(|e| {
+                        eprintln!("Error creating output directory '{}': {e}", dir.display());
+                        std::process::exit(1);
+                    });
+                }
+            }
+
+            // -o as an exact file path is only valid with a single input.
+            let out_file: Option<&str> = if out_dir.is_none() {
+                output.as_deref()
+            } else {
+                None
+            };
+            if out_file.is_some() && inputs.len() > 1 {
+                eprintln!("Error: --output as a file path cannot be used with multiple inputs.");
+                eprintln!("Pass a directory instead: -o outdir/");
+                std::process::exit(1);
+            }
+
+            let jobs: Vec<(String, String)> = inputs
+                .iter()
+                .map(|input| {
+                    let out = if let Some(f) = out_file {
+                        f.to_string()
+                    } else {
+                        let name = {
+                            let stem = std::path::Path::new(input)
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy();
+                            format!("{stem}-{suffix}.jpg")
+                        };
+                        match out_dir {
+                            Some(ref dir) => dir.join(&name).to_string_lossy().into_owned(),
+                            None => name,
+                        }
+                    };
+                    (input.clone(), out)
+                })
+                .collect();
+
+            fuji::convert(&jobs, &settings);
         }
     }
 }
