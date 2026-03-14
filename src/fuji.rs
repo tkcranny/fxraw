@@ -2,8 +2,126 @@
 
 use crate::profile::{self, RecipeSettings};
 use crate::ptp::{self, PtpCamera, RC_OK};
+use crate::ui::ConvertProgress;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+
+// ---------------------------------------------------------------------------
+// RAF metadata (ISO, DR) for pre-flight validation
+// ---------------------------------------------------------------------------
+
+pub struct RafMeta {
+    pub iso: Option<u32>,
+    pub dynamic_range: Option<u32>,
+}
+
+/// Minimum ISO required for each DR level on X-Trans 5 (X100VI).
+/// DR200 uses 1-stop underexposure → needs 2× base ISO (400).
+/// DR400 uses 2-stop underexposure → needs 4× base ISO (800).
+pub fn min_iso_for_dr(dr: u32) -> u32 {
+    match dr {
+        400 => 800,
+        200 => 400,
+        _ => 0,
+    }
+}
+
+/// Highest DR the camera can apply given the shooting ISO.
+pub fn max_dr_for_iso(iso: u32) -> u32 {
+    if iso >= 800 {
+        400
+    } else if iso >= 400 {
+        200
+    } else {
+        100
+    }
+}
+
+/// Result of DR clamping: the final DR value and any warnings generated.
+pub struct DrClampResult {
+    pub dr: u32,
+    pub warnings: Vec<String>,
+}
+
+/// Clamp recipe DR to what the RAF actually supports.
+///
+/// Two hard constraints (violating either produces green/corrupt output):
+///
+///   1. ISO floor: DR200 needs ISO 400+, DR400 needs ISO 800+.
+///
+///   2. Max 1-stop increase from shooting DR. The raw data only has headroom
+///      for one additional stop of DR expansion beyond what was captured.
+///      DR100 shots support up to DR200; DR200 shots support up to DR400.
+///      (Matches the limits enforced by Fuji X RAW Studio.)
+pub fn clamp_dr(recipe_dr: u32, iso: Option<u32>, shot_dr: Option<u32>) -> DrClampResult {
+    let mut dr = recipe_dr;
+    let mut warnings = Vec::new();
+
+    if let Some(iso) = iso {
+        let iso_max = max_dr_for_iso(iso);
+        if dr > iso_max {
+            warnings.push(format!(
+                "DR: Recipe requests DR{dr} but ISO {iso} supports up to DR{iso_max} \
+                 (DR{dr} needs ISO {}). Clamping.",
+                min_iso_for_dr(dr)
+            ));
+            dr = iso_max;
+        }
+    }
+
+    if let Some(shot) = shot_dr {
+        let ceiling = (shot * 2).min(400);
+        if dr > ceiling {
+            warnings.push(format!(
+                "DR: Recipe requests DR{dr} but this RAF was shot at DR{shot} \
+                 (max 1-stop increase → DR{ceiling}). Clamping."
+            ));
+            dr = ceiling;
+        }
+    }
+
+    DrClampResult { dr, warnings }
+}
+
+pub fn read_raf_meta(path: &str) -> RafMeta {
+    let output = Command::new("exiftool")
+        .args(["-s", "-s", "-s", "-ISO", "-FujiFilm:DynamicRange"])
+        .arg(path)
+        .output();
+
+    let (iso, dr) = match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let mut iso = None;
+            let mut dr = None;
+            for line in stdout.lines() {
+                let line = line.trim();
+                if iso.is_none() {
+                    if let Ok(v) = line.parse::<u32>() {
+                        iso = Some(v);
+                        continue;
+                    }
+                }
+                if dr.is_none() {
+                    let dr_val = match line {
+                        "Standard" => Some(100),
+                        "Wide1" | "Wide 1" => Some(200),
+                        "Wide2" | "Wide 2" => Some(400),
+                        s => s.trim_end_matches('%').parse::<u32>().ok(),
+                    };
+                    if let Some(v) = dr_val {
+                        dr = Some(v);
+                    }
+                }
+            }
+            (iso, dr)
+        }
+        _ => (None, None),
+    };
+
+    RafMeta { iso, dynamic_range: dr }
+}
 
 // ---------------------------------------------------------------------------
 // Fujifilm USB identifiers
@@ -147,9 +265,8 @@ pub fn probe() {
 // convert – process a RAF file through the camera
 // ---------------------------------------------------------------------------
 
-pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings) {
-    // Validate all inputs up-front before touching the camera
-    let mut validated: Vec<(&str, &str, Vec<u8>)> = Vec::with_capacity(jobs.len());
+pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings, ui: &ConvertProgress) {
+    let mut validated: Vec<(&str, &str, Vec<u8>, RecipeSettings)> = Vec::with_capacity(jobs.len());
     for (input, output) in jobs {
         let input_path = Path::new(input);
         if !input_path.exists() {
@@ -164,18 +281,34 @@ pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings) {
             eprintln!("Error: {input} does not appear to be a valid Fujifilm RAF file.");
             std::process::exit(1);
         }
-        validated.push((input, output, raf_data));
+
+        let meta = read_raf_meta(input);
+        let mut file_recipe = recipe.clone();
+
+        if meta.iso.is_some() || meta.dynamic_range.is_some() {
+            ui.meta_info(input, meta.iso, meta.dynamic_range);
+        }
+
+        if let Some(recipe_dr) = file_recipe.dynamic_range {
+            let result = clamp_dr(recipe_dr, meta.iso, meta.dynamic_range);
+            for w in &result.warnings {
+                ui.dr_clamped(w);
+            }
+            if result.dr != recipe_dr {
+                file_recipe.dynamic_range = Some(result.dr);
+            }
+        }
+
+        validated.push((input, output, raf_data, file_recipe));
     }
 
     let total = validated.len();
-    if total > 1 {
-        println!("Converting {total} files\n");
-    }
+    ui.batch_header(total);
 
     // ------------------------------------------------------------------
     // Connect & open session (once for the whole batch)
     // ------------------------------------------------------------------
-    println!("[connect] Connecting to camera...");
+    ui.step(0, "connecting…");
     let mut camera = open_camera();
     camera.open_session().unwrap_or_else(|e| {
         eprintln!("  Failed to open session: {e}");
@@ -186,25 +319,14 @@ pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings) {
         eprintln!("  Failed to get device info: {e}");
         std::process::exit(1);
     });
-    println!(
-        "  {} {} (fw {})",
-        info.manufacturer, info.model, info.device_version
-    );
+    ui.camera_info(&info.manufacturer, &info.model, &info.device_version);
 
-    // Check USB mode (0xD16E should be 6 for RAW CONV)
     match camera.get_device_prop_value(0xD16E) {
         Ok(data) if data.len() >= 2 => {
             let mode = u16::from_le_bytes([data[0], data[1]]);
-            println!("  USB mode = {} (expect 6 for RAW CONV)", mode);
-            if mode != 6 {
-                eprintln!("\n  WARNING: Camera may not be in RAW CONV mode.");
-                eprintln!(
-                    "  Set camera to: Connection Setting -> Connection Mode -> USB RAW CONV./BACKUP RESTORE"
-                );
-                eprintln!("  Then reconnect USB and retry.\n");
-            }
+            ui.usb_mode(mode);
         }
-        _ => println!("  Could not read 0xD16E (connection mode)"),
+        _ => ui.usb_mode_unreadable(),
     }
 
     // ------------------------------------------------------------------
@@ -213,178 +335,177 @@ pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings) {
     let mut succeeded = 0u32;
     let mut failed = 0u32;
 
-    for (idx, (input, output, raf_data)) in validated.iter().enumerate() {
-        let file_num = idx + 1;
+    for (idx, (input, output, raf_data, file_recipe)) in validated.iter().enumerate() {
         let raf_size_mb = raf_data.len() as f64 / (1024.0 * 1024.0);
+        ui.file_start(idx, input, output, raf_size_mb);
 
-        if total > 1 {
-            println!("\n{}", "=".repeat(60));
-            println!("[{file_num}/{total}] {input}");
-            println!("{}", "=".repeat(60));
-        }
-        println!("Input:  {input}");
-        println!("Output: {output}");
-        println!("RAF:    {:.1} MB\n", raf_size_mb);
-
-        match convert_one(&mut camera, raf_data, raf_size_mb, output, recipe) {
-            Ok(()) => {
+        match convert_one(&mut camera, raf_data, raf_size_mb, output, file_recipe, ui) {
+            Ok(jpeg_size_mb) => {
                 succeeded += 1;
-                println!("\n  Conversion complete!");
+                ui.file_done(output, jpeg_size_mb);
             }
             Err(e) => {
                 failed += 1;
-                eprintln!("\n  FAILED: {e}");
-                if failed > 0 && file_num < total {
-                    eprintln!("  Continuing with next file...");
-                }
+                ui.file_failed(input, &e);
             }
         }
     }
 
     let _ = camera.close_session();
+    ui.summary(succeeded, failed);
 
-    if total > 1 {
-        println!("\n{} succeeded, {} failed out of {} files.", succeeded, failed, total);
-    }
     if failed > 0 {
         std::process::exit(1);
     }
 }
 
-/// Process a single RAF through the camera. Returns Err on failure so the
-/// caller can continue with the next file instead of aborting.
+/// Process a single RAF through the camera. Returns the JPEG size in MB on
+/// success, or an error message so the caller can continue with the next file.
 fn convert_one(
     camera: &mut PtpCamera,
     raf_data: &[u8],
     raf_size_mb: f64,
     output_path: &str,
     recipe: &RecipeSettings,
-) -> Result<(), String> {
+    ui: &ConvertProgress,
+) -> Result<f64, String> {
     // Step A: Send ObjectInfo via 0x900C
-    println!("[1/6] Sending ObjectInfo (0x900C)...");
+    ui.step(1, "sending object info…");
     let obj_info = ptp::build_object_info(
         PTP_OFC_FUJI_RAW_UPLOAD,
         raf_data.len() as u32,
         "FUP_FILE.dat",
     );
     let resp = camera.vendor_send(FUJI_OC_SEND_OBJECT_INFO, &[0, 0, 0], &obj_info)?;
-    println!(
-        "  -> 0x{:04X} ({})",
+    ui.step_detail(&format!(
+        "-> 0x{:04X} ({})",
         resp.code,
         ptp::response_name(resp.code)
-    );
+    ));
     if resp.code != RC_OK {
         return Err("0x900C failed. Is the camera in USB RAW CONV mode?".into());
     }
 
     // Step B: Send RAF file data via 0x900D
-    println!("[2/6] Uploading RAF ({:.1} MB via 0x900D)...", raf_size_mb);
+    ui.step(2, &format!("uploading RAF ({raf_size_mb:.1} MB)…"));
     let resp = camera.vendor_send(FUJI_OC_SEND_OBJECT, &[], raf_data)?;
-    println!(
-        "  -> 0x{:04X} ({})",
+    ui.step_detail(&format!(
+        "-> 0x{:04X} ({})",
         resp.code,
         ptp::response_name(resp.code)
-    );
+    ));
     if resp.code != RC_OK {
         return Err("0x900D (SendObject) failed.".into());
     }
 
     // Step C/D: Get development profile, apply recipe, set it back
-    println!("[3/6] Reading development profile (0xD185)...");
+    ui.step(3, "reading development profile…");
     let mut profile_data = match camera.get_device_prop_value(FUJI_PROP_RAW_CONV_PROFILE) {
         Ok(data) => {
-            println!("  Got {} bytes of profile data", data.len());
-            println!("  Current film sim: {}", profile::current_film_sim(&data));
-            profile::dump_profile(&data);
+            ui.step_detail(&format!("Got {} bytes of profile data", data.len()));
+            ui.step_detail(&format!(
+                "Current film sim: {}",
+                profile::current_film_sim(&data)
+            ));
             data
         }
         Err(e) => {
-            eprintln!("  Warning: could not read profile: {e}");
-            eprintln!("  Proceeding without profile (camera will use defaults)");
+            ui.step_detail(&format!("Warning: could not read profile: {e}"));
+            ui.step_detail("Proceeding without profile (camera will use defaults)");
             Vec::new()
         }
     };
 
     if !profile_data.is_empty() {
         if !recipe.is_empty() {
-            println!("\n  Applying recipe: {}", recipe.summary());
+            ui.step_detail(&format!("Applying recipe: {}", recipe.summary()));
             let changes = profile::apply_recipe(&mut profile_data, recipe);
-            println!("  {changes}");
+            ui.step_detail(&changes);
         }
 
-        println!("[4/6] Setting development profile (0xD185)...");
+        ui.step(4, "setting development profile…");
         match camera.set_device_prop_value(FUJI_PROP_RAW_CONV_PROFILE, &profile_data) {
-            Ok(()) => println!("  -> OK"),
-            Err(e) => eprintln!("  Warning: could not set profile: {e}"),
+            Ok(()) => ui.step_detail("-> OK"),
+            Err(e) => ui.step_detail(&format!("Warning: could not set profile: {e}")),
         }
     } else {
-        println!("[4/6] Skipping profile set (no profile data)");
+        ui.step(4, "skipping profile (no data)…");
     }
 
-    // Step E: Trigger conversion by setting 0xD183 = 0
-    println!("[5/6] Triggering RAW conversion (Set 0xD183 = 0)...");
+    // Step E: Trigger conversion
+    ui.step(5, "triggering RAW conversion…");
     match camera.set_device_prop_value(FUJI_PROP_START_RAW_CONV, &0u32.to_le_bytes()) {
-        Ok(()) => println!("  -> OK"),
+        Ok(()) => ui.step_detail("-> OK"),
         Err(e) => {
-            println!("  u32 failed ({e}), trying u16...");
+            ui.step_detail(&format!("u32 failed ({e}), trying u16..."));
             camera
                 .set_device_prop_value(FUJI_PROP_START_RAW_CONV, &0u16.to_le_bytes())
                 .map_err(|e2| format!("Failed to trigger conversion: {e2}"))?;
-            println!("  -> OK (u16)");
+            ui.step_detail("-> OK (u16)");
         }
     }
 
     // Step F/G: Poll GetObjectHandles until the JPEG appears, then download
-    println!("[6/6] Waiting for converted image...");
+    ui.step(6, "waiting for camera…");
+    ui.poll_start();
+
     let poll_interval = std::time::Duration::from_secs(2);
     let max_polls = 45;
 
     for attempt in 1..=max_polls {
         std::thread::sleep(poll_interval);
-        print!("  Poll {attempt}/{max_polls}... ");
+        ui.poll_tick(attempt, max_polls);
 
         match camera.get_object_handles(0xFFFFFFFF, 0, 0) {
             Ok(handles) if !handles.is_empty() => {
-                println!("found {} object(s): {:08X?}", handles.len(), handles);
+                ui.poll_result(&format!(
+                    "found {} object(s): {:08X?}",
+                    handles.len(),
+                    handles
+                ));
+                ui.poll_done();
 
                 let handle = handles[0];
-                println!("  Downloading object 0x{handle:08X}...");
+                ui.step_detail(&format!("Downloading object 0x{handle:08X}..."));
                 match camera.get_object(handle) {
                     Ok(data) => {
                         let size_mb = data.len() as f64 / (1024.0 * 1024.0);
-                        println!("  Got {:.1} MB", size_mb);
+                        ui.step_detail(&format!("Got {size_mb:.1} MB"));
 
                         if data.len() >= 2 && data[0] == 0xFF && data[1] == 0xD8 {
-                            println!("  JPEG signature verified!");
+                            ui.step_detail("JPEG signature verified!");
                         } else {
-                            println!("  Warning: data doesn't start with JPEG magic (FF D8)");
-                            print_hex_dump(&data, 64);
+                            ui.step_detail(
+                                "Warning: data doesn't start with JPEG magic (FF D8)",
+                            );
                         }
 
                         fs::write(output_path, &data).unwrap_or_else(|e| {
                             eprintln!("  Error writing {output_path}: {e}");
                             std::process::exit(1);
                         });
-                        println!("\n  Saved: {output_path} ({:.1} MB)", size_mb);
 
-                        println!("  Cleaning up (DeleteObject)...");
+                        ui.step_detail(&format!("Cleaning up (DeleteObject)..."));
                         match camera.delete_object(handle) {
-                            Ok(_) => println!("  Object deleted."),
-                            Err(e) => println!("  Could not delete object: {e}"),
+                            Ok(_) => ui.step_detail("Object deleted."),
+                            Err(e) => {
+                                ui.step_detail(&format!("Could not delete object: {e}"))
+                            }
                         }
 
-                        return Ok(());
+                        return Ok(size_mb);
                     }
                     Err(e) => {
-                        println!("  GetObject failed: {e}");
+                        ui.poll_result(&format!("GetObject failed: {e}"));
                     }
                 }
             }
-            Ok(_) => println!("no objects yet"),
-            Err(e) => println!("error: {e}"),
+            Ok(_) => ui.poll_result("no objects yet"),
+            Err(e) => ui.poll_result(&format!("error: {e}")),
         }
     }
 
+    ui.poll_done();
     Err("Timed out waiting for the camera to produce the converted image.".into())
 }
 

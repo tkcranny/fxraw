@@ -6,8 +6,9 @@ mod fuji;
 mod profile;
 mod ptp;
 mod recipes;
+mod ui;
 
-use profile::{parse_exposure_comp, FilmSimulation, GrainEffect};
+use profile::{parse_exposure_comp, FilmSimulation, GrainEffect, GrainSize};
 
 #[derive(Parser)]
 #[command(name = "fjx")]
@@ -62,13 +63,25 @@ enum Commands {
         #[arg(short, long, value_enum)]
         film_sim: Option<FilmSimulation>,
 
-        /// Grain effect (overrides recipe if both given)
+        /// Grain effect (overrides recipe if both given): off, weak, strong
         #[arg(short, long, value_enum)]
         grain: Option<GrainEffect>,
+
+        /// Grain size when grain is on (overrides recipe): small, large
+        #[arg(long = "grain-size", value_enum)]
+        grain_size: Option<GrainSize>,
 
         /// Exposure compensation: +1.3, -0.7, +2, 0 (or +1 1/3, -2/3)
         #[arg(short, long, value_name = "EV", allow_hyphen_values = true)]
         exposure_comp: Option<String>,
+
+        /// Keep the original white balance from the RAF instead of applying the recipe's WB
+        #[arg(long)]
+        keep_wb: bool,
+
+        /// Show detailed step-by-step output (default: clean progress display)
+        #[arg(short = 'v', long)]
+        verbose: bool,
     },
 }
 
@@ -112,8 +125,13 @@ fn main() {
             recipe,
             film_sim,
             grain,
+            grain_size,
             exposure_comp,
+            keep_wb,
+            verbose,
         } => {
+            let ui = ui::ConvertProgress::new(verbose, inputs.len());
+
             let ev = exposure_comp.map(|s| {
                 parse_exposure_comp(&s).unwrap_or_else(|e| {
                     eprintln!("Invalid exposure compensation '{s}': {e}");
@@ -125,7 +143,7 @@ fn main() {
             let mut settings = if let Some(ref name) = recipe {
                 match recipes::find(name) {
                     Some(r) => {
-                        println!("Recipe: {} ({})\n", r.name, r.slug);
+                        ui.recipe_header(&r.name, &r.slug);
                         r.to_settings()
                     }
                     None => {
@@ -138,11 +156,18 @@ fn main() {
                 Default::default()
             };
 
-            settings.merge_cli(film_sim, grain, ev);
+            settings.merge_cli(film_sim, grain, grain_size, ev);
+
+            if keep_wb {
+                settings.white_balance = None;
+                settings.wb_temp = None;
+                settings.wb_shift_r = None;
+                settings.wb_shift_b = None;
+                ui.keep_wb_notice();
+            }
 
             let suffix = recipe.as_deref().unwrap_or("converted");
 
-            // Determine whether -o is a directory, a file path, or absent.
             let out_dir: Option<std::path::PathBuf> = output.as_ref().and_then(|o| {
                 let p = std::path::Path::new(o);
                 if p.is_dir() || o.ends_with('/') || o.ends_with(std::path::MAIN_SEPARATOR) || inputs.len() > 1 {
@@ -152,7 +177,6 @@ fn main() {
                 }
             });
 
-            // Create the output directory if needed.
             if let Some(ref dir) = out_dir {
                 if !dir.exists() {
                     std::fs::create_dir_all(dir).unwrap_or_else(|e| {
@@ -162,7 +186,6 @@ fn main() {
                 }
             }
 
-            // -o as an exact file path is only valid with a single input.
             let out_file: Option<&str> = if out_dir.is_none() {
                 output.as_deref()
             } else {
@@ -196,7 +219,7 @@ fn main() {
                 })
                 .collect();
 
-            fuji::convert(&jobs, &settings);
+            fuji::convert(&jobs, &settings, &ui);
         }
     }
 }

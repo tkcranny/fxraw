@@ -1,0 +1,15 @@
+[tools]
+rust = "1.94.0"
+
+[tasks.update-recipes]
+description = "Fetch FXW recipes from online and rebuild the recipes.json file"
+run = "scripts/build_recipes"
+
+[tasks.build]
+description = "Build a release version of the CLI. Use cargo run for dev"
+run = "cargo build --release"
+
+[tasks.install]
+depends = ["update-recipes", "build"]
+description = "Install the CLI to $HOME/bin/fjx"
+run = "cp ./target/release/fjx $HOME/bin/fjx"

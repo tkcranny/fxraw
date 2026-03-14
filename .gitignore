@@ -1,3 +1,6 @@
 .vscode
 target
 .mypy_cache
+
+*.RAF
+*.jpg

@@ -48,6 +48,7 @@ cargo run -- convert photo.raf -o output.jpg
 cargo run -- convert photo.raf -r kodak-tri-x-400
 cargo run -- convert photo.raf -r "kodak gold" -o gold.jpg
 cargo run -- convert photo.raf -f acros -g weak -o acros.jpg
+cargo run -- convert photo.raf -r portra-400 -g strong --grain-size large -o grainy.jpg
 cargo run -- convert *.raf -r portra-400
 cargo run -- convert *.raf -r classic-chrome -o jpegs/
 ```
@@ -59,7 +60,8 @@ cargo run -- convert *.raf -r classic-chrome -o jpegs/
 | `-o, --output <PATH>` | Output JPEG path or directory (created if needed; defaults to `<input>-<recipe>.jpg`) |
 | `-r, --recipe <NAME>` | Use a built-in recipe preset (exact slug or partial match on slug/name) |
 | `-f, --film-sim <SIM>` | Film simulation override (takes priority over recipe) |
-| `-g, --grain <LEVEL>` | Grain effect override (takes priority over recipe) |
+| `-g, --grain <LEVEL>` | Grain effect override: `off`, `weak`, `strong` |
+| `--grain-size <SIZE>` | Grain size when grain is on: `small`, `large` |
 
 #### Recipes
 

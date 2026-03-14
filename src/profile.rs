@@ -173,7 +173,7 @@ impl GrainSize {
     }
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
 pub enum ChromeLevel {
     Off,
     Weak,
@@ -342,7 +342,7 @@ fn encode_white_balance(mode: &str, _temp: Option<u32>) -> Option<u32> {
 // Recipe settings — all supported overrides
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RecipeSettings {
     pub film_sim: Option<FilmSimulation>,
     pub grain: Option<GrainEffect>,
@@ -452,6 +452,7 @@ impl RecipeSettings {
         &mut self,
         film_sim: Option<FilmSimulation>,
         grain: Option<GrainEffect>,
+        grain_size: Option<GrainSize>,
         exposure_comp: Option<i32>,
     ) {
         if let Some(fs) = film_sim {
@@ -459,6 +460,9 @@ impl RecipeSettings {
         }
         if let Some(g) = grain {
             self.grain = Some(g);
+        }
+        if let Some(gs) = grain_size {
+            self.grain_size = Some(gs);
         }
         if let Some(ev) = exposure_comp {
             self.exposure_comp = Some(ev);
