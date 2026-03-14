@@ -1,0 +1,8 @@
+# Fujifilm X100VI project config — use with: fjx project convert
+
+# Directory containing RAF files (default: ./_RAF)
+raw_dir = "./_RAF"
+
+# Conversion outputs: each [[output]] gets its own directory.
+[[output]]
+recipe = "portra-400"

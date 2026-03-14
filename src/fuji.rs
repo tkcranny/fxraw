@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::profile::{self, RecipeSettings};
-use crate::ptp::{self, PtpCamera, RC_OK};
+use crate::ptp::{self, DeviceInfo, PtpCamera, PtpResponse, RC_OK};
 use crate::ui::ConvertProgress;
 use std::fs;
 use std::path::Path;
@@ -198,7 +198,7 @@ pub fn probe() {
                     resp.code,
                     ptp::response_name(resp.code)
                 );
-                println!("  Data: {} bytes", data.len());
+                println!("  Data: {} bytes", data.len() as usize);
                 if !data.is_empty() {
                     print_hex_dump(&data, 256);
                 }
@@ -265,7 +265,12 @@ pub fn probe() {
 // convert – process a RAF file through the camera
 // ---------------------------------------------------------------------------
 
-pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings, ui: &ConvertProgress) {
+pub fn convert(
+    camera: &mut dyn ptp::FujiCamera,
+    jobs: &[(String, String)],
+    recipe: &RecipeSettings,
+    ui: &ConvertProgress,
+) {
     let mut validated: Vec<(&str, &str, Vec<u8>, RecipeSettings)> = Vec::with_capacity(jobs.len());
     for (input, output) in jobs {
         let input_path = Path::new(input);
@@ -306,10 +311,9 @@ pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings, ui: &ConvertP
     ui.batch_header(total);
 
     // ------------------------------------------------------------------
-    // Connect & open session (once for the whole batch)
+    // Open session (once for the whole batch)
     // ------------------------------------------------------------------
     ui.step(0, "connecting…");
-    let mut camera = open_camera();
     camera.open_session().unwrap_or_else(|e| {
         eprintln!("  Failed to open session: {e}");
         std::process::exit(1);
@@ -339,7 +343,7 @@ pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings, ui: &ConvertP
         let raf_size_mb = raf_data.len() as f64 / (1024.0 * 1024.0);
         ui.file_start(idx, input, output, raf_size_mb);
 
-        match convert_one(&mut camera, raf_data, raf_size_mb, output, file_recipe, ui) {
+        match convert_one(camera, raf_data, raf_size_mb, output, file_recipe, ui) {
             Ok(jpeg_size_mb) => {
                 succeeded += 1;
                 ui.file_done(output, jpeg_size_mb);
@@ -362,7 +366,7 @@ pub fn convert(jobs: &[(String, String)], recipe: &RecipeSettings, ui: &ConvertP
 /// Process a single RAF through the camera. Returns the JPEG size in MB on
 /// success, or an error message so the caller can continue with the next file.
 fn convert_one(
-    camera: &mut PtpCamera,
+    camera: &mut dyn ptp::FujiCamera,
     raf_data: &[u8],
     raf_size_mb: f64,
     output_path: &str,
@@ -511,6 +515,94 @@ fn convert_one(
 }
 
 // ---------------------------------------------------------------------------
+// Stub camera for tests (no USB device)
+// ---------------------------------------------------------------------------
+
+/// Minimal valid JPEG (SOI + minimal segment + EOI) for stub conversion output.
+pub const STUB_JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29, 0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32, 0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x7B, 0x94, 0x32, 0x2B, 0xFF, 0xD9];
+
+/// Mock camera used when FJX_STUB_CAMERA=1 (e.g. in tests). Returns STUB_JPEG from get_object(1).
+pub struct StubCamera;
+
+impl ptp::FujiCamera for StubCamera {
+    fn open_session(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    fn close_session(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    fn get_device_info(&mut self) -> Result<DeviceInfo, String> {
+        Ok(DeviceInfo {
+            standard_version: 100,
+            vendor_extension_id: 0,
+            vendor_extension_version: 0,
+            vendor_extension_desc: String::new(),
+            functional_mode: 0,
+            operations_supported: vec![],
+            events_supported: vec![],
+            device_properties_supported: vec![],
+            capture_formats: vec![],
+            image_formats: vec![],
+            manufacturer: "FJX Stub".into(),
+            model: "Test".into(),
+            device_version: "0".into(),
+            serial_number: String::new(),
+        })
+    }
+    fn get_device_prop_value(&mut self, _prop: u16) -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+    fn set_device_prop_value(&mut self, _prop: u16, _data: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+    fn vendor_send(
+        &mut self,
+        _op: u16,
+        _params: &[u32],
+        _data: &[u8],
+    ) -> Result<PtpResponse, String> {
+        Ok(PtpResponse {
+            code: RC_OK,
+            params: vec![],
+        })
+    }
+    fn get_object_handles(
+        &mut self,
+        _storage_id: u32,
+        _format: u32,
+        _parent: u32,
+    ) -> Result<Vec<u32>, String> {
+        Ok(vec![1])
+    }
+    fn get_object(&mut self, handle: u32) -> Result<Vec<u8>, String> {
+        if handle == 1 {
+            Ok(STUB_JPEG.to_vec())
+        } else {
+            Ok(Vec::new())
+        }
+    }
+    fn delete_object(&mut self, _handle: u32) -> Result<PtpResponse, String> {
+        Ok(PtpResponse {
+            code: RC_OK,
+            params: vec![],
+        })
+    }
+    fn vendor_receive(
+        &mut self,
+        _op: u16,
+        _params: &[u32],
+    ) -> Result<(Vec<u8>, PtpResponse), String> {
+        Ok((
+            Vec::new(),
+            PtpResponse {
+                code: RC_OK,
+                params: vec![],
+            },
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -530,17 +622,24 @@ pub fn chown_to_sudo_user(path: &str) {
 #[cfg(not(unix))]
 pub fn chown_to_sudo_user(_path: &str) {}
 
-fn open_camera() -> PtpCamera {
-    PtpCamera::open(FUJIFILM_VENDOR_ID, DEFAULT_PRODUCT_ID).unwrap_or_else(|e| {
-        eprintln!("Error: {e}");
-        eprintln!();
-        eprintln!("Make sure:");
-        eprintln!("  - The camera is connected via USB and turned on");
-        eprintln!("  - No other app (Photos, Image Capture) is using it");
-        eprintln!("  - USB mode is set correctly on the camera");
-        eprintln!("  - You have run `sudo fjx setup` (one-time macOS PTP daemon fix)");
-        std::process::exit(1);
-    })
+/// Open the camera (real USB or stub when FJX_STUB_CAMERA=1). Caller must pass
+/// the returned box to `convert()`.
+pub fn open_camera() -> Box<dyn ptp::FujiCamera> {
+    if std::env::var("FJX_STUB_CAMERA").is_ok() {
+        return Box::new(StubCamera);
+    }
+    Box::new(
+        PtpCamera::open(FUJIFILM_VENDOR_ID, DEFAULT_PRODUCT_ID).unwrap_or_else(|e| {
+            eprintln!("Error: {e}");
+            eprintln!();
+            eprintln!("Make sure:");
+            eprintln!("  - The camera is connected via USB and turned on");
+            eprintln!("  - No other app (Photos, Image Capture) is using it");
+            eprintln!("  - USB mode is set correctly on the camera");
+            eprintln!("  - You have run `sudo fjx setup` (one-time macOS PTP daemon fix)");
+            std::process::exit(1);
+        }),
+    )
 }
 
 fn print_device_info(info: &ptp::DeviceInfo) {

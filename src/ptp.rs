@@ -100,6 +100,39 @@ pub struct DeviceInfo {
 }
 
 // ---------------------------------------------------------------------------
+// FujiCamera – abstraction for conversion (real camera or test stub)
+// ---------------------------------------------------------------------------
+
+/// Trait for the camera operations used during RAF→JPEG conversion.
+/// Implemented by PtpCamera (real USB) and by a mock in tests.
+pub trait FujiCamera {
+    fn open_session(&mut self) -> Result<(), String>;
+    fn close_session(&mut self) -> Result<(), String>;
+    fn get_device_info(&mut self) -> Result<DeviceInfo, String>;
+    fn get_device_prop_value(&mut self, prop: u16) -> Result<Vec<u8>, String>;
+    fn set_device_prop_value(&mut self, prop: u16, data: &[u8]) -> Result<(), String>;
+    fn vendor_send(
+        &mut self,
+        op: u16,
+        params: &[u32],
+        data: &[u8],
+    ) -> Result<PtpResponse, String>;
+    fn get_object_handles(
+        &mut self,
+        storage_id: u32,
+        format: u32,
+        parent: u32,
+    ) -> Result<Vec<u32>, String>;
+    fn get_object(&mut self, handle: u32) -> Result<Vec<u8>, String>;
+    fn delete_object(&mut self, handle: u32) -> Result<PtpResponse, String>;
+    fn vendor_receive(
+        &mut self,
+        op: u16,
+        params: &[u32],
+    ) -> Result<(Vec<u8>, PtpResponse), String>;
+}
+
+// ---------------------------------------------------------------------------
 // PtpCamera – PTP-over-USB transport
 // ---------------------------------------------------------------------------
 
@@ -492,6 +525,53 @@ impl PtpCamera {
         params: &[u32],
     ) -> Result<(Vec<u8>, PtpResponse), String> {
         self.transact_data_in(op, params, Duration::from_secs(10))
+    }
+}
+
+impl FujiCamera for PtpCamera {
+    fn open_session(&mut self) -> Result<(), String> {
+        self.open_session()
+    }
+    fn close_session(&mut self) -> Result<(), String> {
+        self.close_session()
+    }
+    fn get_device_info(&mut self) -> Result<DeviceInfo, String> {
+        self.get_device_info()
+    }
+    fn get_device_prop_value(&mut self, prop: u16) -> Result<Vec<u8>, String> {
+        self.get_device_prop_value(prop)
+    }
+    fn set_device_prop_value(&mut self, prop: u16, data: &[u8]) -> Result<(), String> {
+        self.set_device_prop_value(prop, data)
+    }
+    fn vendor_send(
+        &mut self,
+        op: u16,
+        params: &[u32],
+        data: &[u8],
+    ) -> Result<PtpResponse, String> {
+        self.vendor_send(op, params, data)
+    }
+    fn get_object_handles(
+        &mut self,
+        storage_id: u32,
+        format: u32,
+        parent: u32,
+    ) -> Result<Vec<u32>, String> {
+        self.get_object_handles(storage_id, format, parent)
+    }
+    fn get_object(&mut self, handle: u32) -> Result<Vec<u8>, String> {
+        self.get_object(handle)
+    }
+    fn delete_object(&mut self, handle: u32) -> Result<PtpResponse, String> {
+        self.delete_object(handle)
+    }
+    fn vendor_receive(
+        &mut self,
+        op: u16,
+        params: &[u32],
+    ) -> Result<(Vec<u8>, PtpResponse), String> {
+        self.vendor_receive(op, params)
     }
 }
 

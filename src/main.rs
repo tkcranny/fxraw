@@ -1,14 +1,6 @@
 use clap::{Parser, Subcommand};
-
-mod analyse;
-mod detect;
-mod fuji;
-mod profile;
-mod ptp;
-mod recipes;
-mod ui;
-
-use profile::{parse_exposure_comp, FilmSimulation, GrainEffect, GrainSize};
+use fjx::profile::{parse_exposure_comp, FilmSimulation, GrainEffect, GrainSize};
+use fjx::{analyse, config, detect, fuji, ptp, recipes, ui};
 
 #[derive(Parser)]
 #[command(name = "fjx")]
@@ -43,6 +35,12 @@ enum Commands {
         /// Re-enable the PTP daemons (undo a previous setup)
         #[arg(long)]
         undo: bool,
+    },
+
+    /// Project config: create, validate, or convert from fjx.toml
+    Project {
+        #[command(subcommand)]
+        subcommand: ProjectCommand,
     },
 
     /// Convert one or more RAF files to JPEG using the camera's image processor
@@ -85,6 +83,22 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+enum ProjectCommand {
+    /// Write fjx.toml (and optionally create _RAF); optional recipe as first output
+    Create {
+        /// Recipe slug to use as first [[output]] (default: classic-chrome)
+        recipe_slug: Option<String>,
+        /// Overwrite existing fjx.toml
+        #[arg(long)]
+        force: bool,
+    },
+    /// Load fjx.toml, check recipes and paths, ensure override keys match RAWs
+    Validate,
+    /// Run conversions from config (raw_dir + all outputs + overrides)
+    Convert,
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.command {
@@ -119,6 +133,14 @@ fn main() {
                 }
             }
         }
+        Commands::Project { subcommand } => match subcommand {
+            ProjectCommand::Create {
+                recipe_slug,
+                force,
+            } => project_create(recipe_slug.as_deref(), force),
+            ProjectCommand::Validate => project_validate(),
+            ProjectCommand::Convert => project_convert(),
+        },
         Commands::Convert {
             inputs,
             output,
@@ -234,7 +256,186 @@ fn main() {
                 })
                 .collect();
 
-            fuji::convert(&jobs, &settings, &ui);
+            let mut camera = fuji::open_camera();
+            fuji::convert(&mut *camera, &jobs, &settings, &ui);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Project subcommand implementations
+// ---------------------------------------------------------------------------
+
+/// Resolve to an absolute path so that listing raw_dir does not depend on cwd.
+fn to_absolute_path(p: &std::path::Path) -> std::path::PathBuf {
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(p)
+    }
+}
+
+fn project_create(recipe_slug: Option<&str>, force: bool) {
+    let cwd = std::env::current_dir().unwrap_or_else(|e| {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    });
+    let config_path = cwd.join(config::CONFIG_FILENAME);
+    if config_path.exists() && !force {
+        eprintln!("{} already exists. Use --force to overwrite.", config_path.display());
+        std::process::exit(1);
+    }
+    let recipe = recipe_slug.unwrap_or("classic-chrome");
+    let toml_content = format!(
+        r#"# Fujifilm X100VI project config — use with: fjx project convert
+
+# Directory containing RAF files (default: ./_RAF)
+raw_dir = "./_RAF"
+
+# Conversion outputs: each [[output]] gets its own directory.
+[[output]]
+recipe = "{}"
+"#,
+        recipe
+    );
+    std::fs::write(&config_path, toml_content).unwrap_or_else(|e| {
+        eprintln!("Error writing {}: {}", config_path.display(), e);
+        std::process::exit(1);
+    });
+    println!("Wrote {}", config_path.display());
+    let raw_dir = cwd.join("_RAF");
+    if !raw_dir.exists() {
+        if std::fs::create_dir_all(&raw_dir).is_ok() {
+            fuji::chown_to_sudo_user(&raw_dir.to_string_lossy());
+            println!("Created {}", raw_dir.display());
+        }
+    }
+}
+
+fn project_validate() {
+    let config_path = match config::find_project_config() {
+        Some(p) => p,
+        None => {
+            eprintln!("No {} found in current or parent directories.", config::CONFIG_FILENAME);
+            std::process::exit(1);
+        }
+    };
+    let project_root = config_path.parent().unwrap_or(std::path::Path::new("."));
+    let project_root = to_absolute_path(project_root);
+    let config = match config::load_config(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error loading config: {e}");
+            std::process::exit(1);
+        }
+    };
+    match config::validate_config(&project_root, &config) {
+        Ok(()) => {
+            println!("Config is valid.");
+            let rafs = config::list_rafs_in_raw_dir(&project_root, &config.raw_dir).unwrap_or_default();
+            println!("  raw_dir '{}': {} RAF(s)", config.raw_dir, rafs.len());
+        }
+        Err(errors) => {
+            for e in &errors {
+                eprintln!("  {e}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+fn project_convert() {
+    let config_path = match config::find_project_config() {
+        Some(p) => p,
+        None => {
+            eprintln!("No {} found in current or parent directories.", config::CONFIG_FILENAME);
+            std::process::exit(1);
+        }
+    };
+    let project_root = config_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let project_root = to_absolute_path(&project_root);
+    let config = match config::load_config(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error loading config: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(errors) = config::validate_config(&project_root, &config) {
+        for e in &errors {
+            eprintln!("  {e}");
+        }
+        std::process::exit(1);
+    }
+    let batches = match config::expand_config(&project_root, &config) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Error expanding config: {e}");
+            std::process::exit(1);
+        }
+    };
+    let total_jobs: usize = batches.iter().flat_map(|b| b.batches.iter().map(|(_, j)| j.len())).sum();
+    if total_jobs == 0 {
+        eprintln!(
+            "No RAF files to convert in raw_dir '{}'. Add .raf files and run again.",
+            config.raw_dir
+        );
+        return;
+    }
+    let ui = ui::ConvertProgress::new(false, total_jobs);
+    let mut camera = fuji::open_camera();
+    let mut all_written: Vec<std::path::PathBuf> = Vec::new();
+    for output_batch in &batches {
+        if !output_batch.output_dir.exists() {
+            let mut to_chown = Vec::new();
+            let mut p = output_batch.output_dir.as_path();
+            loop {
+                if !p.as_os_str().is_empty() && !p.exists() {
+                    to_chown.push(p.to_path_buf());
+                }
+                match p.parent() {
+                    Some(parent) if parent != p => p = parent,
+                    _ => break,
+                }
+            }
+            std::fs::create_dir_all(&output_batch.output_dir).unwrap_or_else(|e| {
+                eprintln!("Error creating output dir {}: {}", output_batch.output_dir.display(), e);
+                std::process::exit(1);
+            });
+            for path in &to_chown {
+                fuji::chown_to_sudo_user(&path.to_string_lossy());
+            }
+        }
+        for (settings, jobs) in &output_batch.batches {
+            if !jobs.is_empty() {
+                eprintln!(
+                    "Converting {} file(s) to {} …",
+                    jobs.len(),
+                    output_batch.output_dir.display()
+                );
+                fuji::convert(&mut *camera, jobs, settings, &ui);
+            }
+            for (_, out_path) in jobs {
+                all_written.push(std::path::PathBuf::from(out_path));
+            }
+        }
+    }
+    // Create _ALL_OUTPUTS and hardlink each written JPEG
+    let all_outputs_dir = project_root.join(config::ALL_OUTPUTS_DIR);
+    if std::fs::create_dir_all(&all_outputs_dir).is_ok() {
+        fuji::chown_to_sudo_user(&all_outputs_dir.to_string_lossy());
+        for path in &all_written {
+            if path.is_file() {
+                let name = path.file_name().map(|n| n.to_owned()).unwrap_or_default();
+                let link_path = all_outputs_dir.join(&name);
+                let _ = std::fs::remove_file(&link_path);
+                let _ = std::fs::hard_link(path, &link_path);
+            }
         }
     }
 }

@@ -58,7 +58,7 @@ const PROP_CLARITY: usize = 26;
 // Film simulation
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
 pub enum FilmSimulation {
     Provia,
     Velvia,
@@ -138,7 +138,7 @@ impl FilmSimulation {
 // Grain effect
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
 pub enum GrainEffect {
     Off,
     Weak,
@@ -158,7 +158,7 @@ impl GrainEffect {
     }
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
 pub enum GrainSize {
     Small,
     Large,
@@ -342,7 +342,7 @@ fn encode_white_balance(mode: &str, _temp: Option<u32>) -> Option<u32> {
 // Recipe settings — all supported overrides
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RecipeSettings {
     pub film_sim: Option<FilmSimulation>,
     pub grain: Option<GrainEffect>,
