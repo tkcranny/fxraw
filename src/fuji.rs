@@ -484,6 +484,7 @@ fn convert_one(
                             eprintln!("  Error writing {output_path}: {e}");
                             std::process::exit(1);
                         });
+                        chown_to_sudo_user(output_path);
 
                         ui.step_detail(&format!("Cleaning up (DeleteObject)..."));
                         match camera.delete_object(handle) {
@@ -512,6 +513,22 @@ fn convert_one(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// If we were invoked via sudo, change ownership of the path (file or directory)
+/// to the real user so they don't end up with root-owned output files.
+#[cfg(unix)]
+pub fn chown_to_sudo_user(path: &str) {
+    let uid = std::env::var("SUDO_UID").ok().and_then(|s| s.parse::<u32>().ok());
+    let gid = std::env::var("SUDO_GID").ok().and_then(|s| s.parse::<u32>().ok());
+    if let (Some(uid), Some(gid)) = (uid, gid) {
+        if let Err(e) = std::os::unix::fs::chown(path, Some(uid), Some(gid)) {
+            eprintln!("  Warning: could not chown output to invoking user: {e}");
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn chown_to_sudo_user(_path: &str) {}
 
 fn open_camera() -> PtpCamera {
     PtpCamera::open(FUJIFILM_VENDOR_ID, DEFAULT_PRODUCT_ID).unwrap_or_else(|e| {

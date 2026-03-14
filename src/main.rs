@@ -179,10 +179,25 @@ fn main() {
 
             if let Some(ref dir) = out_dir {
                 if !dir.exists() {
+                    // Collect path components we're about to create (for chown after)
+                    let mut to_chown: Vec<std::path::PathBuf> = Vec::new();
+                    let mut p = dir.as_path();
+                    loop {
+                        if !p.as_os_str().is_empty() && !p.exists() {
+                            to_chown.push(p.to_path_buf());
+                        }
+                        match p.parent() {
+                            Some(parent) if parent != p => p = parent,
+                            _ => break,
+                        }
+                    }
                     std::fs::create_dir_all(dir).unwrap_or_else(|e| {
                         eprintln!("Error creating output directory '{}': {e}", dir.display());
                         std::process::exit(1);
                     });
+                    for path in &to_chown {
+                        fuji::chown_to_sudo_user(&path.to_string_lossy());
+                    }
                 }
             }
 
