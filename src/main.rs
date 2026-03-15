@@ -3,7 +3,7 @@ use fjx::profile::{parse_exposure_comp, FilmSimulation, GrainEffect, GrainSize};
 use fjx::{analyse, config, detect, fuji, ptp, recipes, ui};
 
 #[derive(Parser)]
-#[command(name = "fjx")]
+#[command(name = "fjx", version)]
 #[command(about = "Fujifilm X100VI USB RAW converter with film simulation recipes")]
 struct Cli {
     #[command(subcommand)]
