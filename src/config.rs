@@ -15,6 +15,7 @@ pub const ALL_OUTPUTS_DIR: &str = "_ALL_OUTPUTS";
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
     #[serde(default = "default_raw_dir")]
     pub raw_dir: String,
@@ -29,10 +30,9 @@ fn default_raw_dir() -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutputEntry {
     pub recipe: String,
-    #[serde(default)]
-    pub name: Option<String>,
     #[serde(default)]
     pub suffix: Option<String>,
     #[serde(default)]
@@ -44,7 +44,7 @@ pub struct OutputEntry {
     #[serde(default)]
     pub exposure_comp: Option<String>,
     #[serde(default)]
-    pub keep_wb: Option<bool>,
+    pub wb_mode: Option<String>,
     #[serde(default)]
     pub overrides: Vec<OutputPerImageOverride>,
 }
@@ -56,7 +56,7 @@ pub struct OutputPerImageOverride {
     pub grain: Option<String>,
     pub grain_size: Option<String>,
     pub exposure_comp: Option<String>,
-    pub keep_wb: Option<bool>,
+    pub wb_mode: Option<String>,
 }
 
 impl OutputPerImageOverride {
@@ -66,6 +66,7 @@ impl OutputPerImageOverride {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PerImageOverride {
     #[serde(default)]
     pub exclude_outputs: Vec<String>,
@@ -78,7 +79,7 @@ pub struct PerImageOverride {
     #[serde(default)]
     pub exposure_comp: Option<String>,
     #[serde(default)]
-    pub keep_wb: Option<bool>,
+    pub wb_mode: Option<String>,
 }
 
 // TOML uses "match" which is a Rust keyword; custom Deserialize.
@@ -88,6 +89,7 @@ impl<'de> Deserialize<'de> for OutputPerImageOverride {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Helper {
             #[serde(rename = "match")]
             match_pattern: String,
@@ -100,7 +102,7 @@ impl<'de> Deserialize<'de> for OutputPerImageOverride {
             #[serde(default)]
             exposure_comp: Option<String>,
             #[serde(default)]
-            keep_wb: Option<bool>,
+            wb_mode: Option<String>,
         }
         let h = Helper::deserialize(deserializer)?;
         Ok(OutputPerImageOverride {
@@ -109,7 +111,7 @@ impl<'de> Deserialize<'de> for OutputPerImageOverride {
             grain: h.grain,
             grain_size: h.grain_size,
             exposure_comp: h.exposure_comp,
-            keep_wb: h.keep_wb,
+            wb_mode: h.wb_mode,
         })
     }
 }
@@ -189,6 +191,50 @@ fn parse_grain_size(s: &str) -> Option<GrainSize> {
     }
 }
 
+/// Parse wb_mode into profile (white_balance, wb_temp). Valid: auto, auto-ambience, daylight,
+/// shade, incandescent, fluorescent-1/2/3, or NNNK (e.g. 5500K).
+fn parse_wb_mode(s: &str) -> Result<(String, Option<u32>), String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty wb_mode".into());
+    }
+    let lower = s.to_lowercase();
+    if lower.ends_with('k') {
+        let num: String = lower.chars().take(lower.len().saturating_sub(1)).collect();
+        let num = num.trim();
+        if num.is_empty() {
+            return Err(format!("invalid wb_mode \"{}\": expected e.g. 5500K", s));
+        }
+        let k: u32 = num.parse().map_err(|_| format!("invalid wb_mode \"{}\": Kelvin must be a number", s))?;
+        if !(2000..=10000).contains(&k) {
+            return Err(format!("invalid wb_mode \"{}\": Kelvin typically 2000–10000", s));
+        }
+        return Ok(("temperature".into(), Some(k)));
+    }
+    let mode = match lower.as_str() {
+        "auto" | "auto-white" | "auto-ambience" => "auto",
+        "daylight" => "daylight",
+        "shade" => "shade",
+        "incandescent" => "incandescent",
+        "fluorescent-1" => "fluorescent-1",
+        "fluorescent-2" => "fluorescent-2",
+        "fluorescent-3" => "fluorescent-3",
+        _ => return Err(format!("unknown wb_mode \"{}\"; use auto, auto-ambience, daylight, shade, incandescent, fluorescent-1/2/3, or e.g. 5500K", s)),
+    };
+    Ok((mode.into(), None))
+}
+
+/// Override white balance in settings. Only called when config has wb_mode; otherwise
+/// the recipe's white_balance (from to_settings()) is used unchanged.
+fn apply_wb_mode_to_settings(base: &mut RecipeSettings, wb_mode: &str) {
+    if let Ok((mode, temp)) = parse_wb_mode(wb_mode) {
+        base.white_balance = Some(mode);
+        base.wb_temp = temp;
+        base.wb_shift_r = None;
+        base.wb_shift_b = None;
+    }
+}
+
 fn apply_overlay_to_settings(base: &mut RecipeSettings, overlay: &PerImageOverride) {
     if let Some(ref s) = overlay.film_sim {
         if let Some(fs) = parse_film_sim(s) {
@@ -210,11 +256,8 @@ fn apply_overlay_to_settings(base: &mut RecipeSettings, overlay: &PerImageOverri
             base.exposure_comp = Some(millis);
         }
     }
-    if overlay.keep_wb == Some(true) {
-        base.white_balance = None;
-        base.wb_temp = None;
-        base.wb_shift_r = None;
-        base.wb_shift_b = None;
+    if let Some(ref s) = overlay.wb_mode {
+        apply_wb_mode_to_settings(base, s);
     }
 }
 
@@ -239,11 +282,8 @@ fn apply_output_overlay_to_settings(base: &mut RecipeSettings, overlay: &OutputP
             base.exposure_comp = Some(millis);
         }
     }
-    if overlay.keep_wb == Some(true) {
-        base.white_balance = None;
-        base.wb_temp = None;
-        base.wb_shift_r = None;
-        base.wb_shift_b = None;
+    if let Some(ref s) = overlay.wb_mode {
+        apply_wb_mode_to_settings(base, s);
     }
 }
 
@@ -271,11 +311,8 @@ fn apply_output_entry_overlay_to_settings(
             base.exposure_comp = Some(millis);
         }
     }
-    if entry.keep_wb == Some(true) {
-        base.white_balance = None;
-        base.wb_temp = None;
-        base.wb_shift_r = None;
-        base.wb_shift_b = None;
+    if let Some(ref s) = entry.wb_mode {
+        apply_wb_mode_to_settings(base, s);
     }
 }
 
@@ -299,6 +336,53 @@ fn glob_match(pattern: &str, name: &str) -> bool {
     }
 }
 
+/// Validate a glob pattern; returns error message if invalid.
+fn validate_glob_pattern(pattern: &str) -> Option<String> {
+    if !pattern.contains('*') {
+        return None;
+    }
+    use glob::Pattern;
+    Pattern::new(pattern).err().map(|e| format!("invalid glob pattern \"{}\": {}", pattern, e))
+}
+
+/// Collect validation errors for overlay-style settings (film_sim, grain, grain_size, exposure_comp, wb_mode).
+fn validate_overlay_settings(
+    context: &str,
+    film_sim: Option<&String>,
+    grain: Option<&String>,
+    grain_size: Option<&String>,
+    exposure_comp: Option<&String>,
+    wb_mode: Option<&String>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if let Some(s) = film_sim {
+        if parse_film_sim(s).is_none() {
+            errors.push(format!("{}: unknown film_sim \"{}\"", context, s));
+        }
+    }
+    if let Some(s) = grain {
+        if parse_grain(s).is_none() {
+            errors.push(format!("{}: unknown grain \"{}\" (use weak or strong)", context, s));
+        }
+    }
+    if let Some(s) = grain_size {
+        if parse_grain_size(s).is_none() {
+            errors.push(format!("{}: unknown grain_size \"{}\" (use small or large)", context, s));
+        }
+    }
+    if let Some(s) = exposure_comp {
+        if let Err(e) = parse_exposure_comp(s) {
+            errors.push(format!("{}: invalid exposure_comp \"{}\": {}", context, s, e));
+        }
+    }
+    if let Some(s) = wb_mode {
+        if let Err(e) = parse_wb_mode(s) {
+            errors.push(format!("{}: {}", context, e));
+        }
+    }
+    errors
+}
+
 // ---------------------------------------------------------------------------
 // Resolve: get base RecipeSettings for an output entry (recipe + entry overlay)
 // ---------------------------------------------------------------------------
@@ -311,20 +395,66 @@ pub fn resolve_output_entry_settings(entry: &OutputEntry) -> Result<RecipeSettin
     Ok(settings)
 }
 
-/// Output directory name for this entry (name or recipe slug).
+/// Output directory name and filename suffix for this entry (suffix or recipe slug).
 pub fn output_dir_name(entry: &OutputEntry) -> &str {
-    entry
-        .name
-        .as_deref()
-        .unwrap_or(entry.recipe.as_str())
+    entry.suffix.as_deref().unwrap_or(entry.recipe.as_str())
 }
 
-/// Suffix for filenames (suffix or recipe slug).
+/// Filename suffix and output dir name (same as output_dir_name).
 pub fn output_suffix(entry: &OutputEntry) -> &str {
-    entry
-        .suffix
-        .as_deref()
-        .unwrap_or(entry.recipe.as_str())
+    entry.suffix.as_deref().unwrap_or(entry.recipe.as_str())
+}
+
+/// Human-readable description of overlay settings (for validate summary).
+fn overlay_description(
+    film_sim: Option<&String>,
+    grain: Option<&String>,
+    grain_size: Option<&String>,
+    exposure_comp: Option<&String>,
+    wb_mode: Option<&String>,
+) -> Vec<String> {
+    let mut parts = Vec::new();
+    if let Some(s) = film_sim {
+        parts.push(format!("film_sim={}", s));
+    }
+    if let Some(s) = grain {
+        parts.push(format!("grain={}", s));
+    }
+    if let Some(s) = grain_size {
+        parts.push(format!("grain_size={}", s));
+    }
+    if let Some(s) = exposure_comp {
+        parts.push(format!("exposure_comp={}", s));
+    }
+    if let Some(s) = wb_mode {
+        parts.push(format!("wb_mode={}", s));
+    }
+    parts
+}
+
+/// Describe a global override entry for the validate summary.
+pub fn describe_global_override(key: &str, ov: &PerImageOverride) -> (String, Vec<String>) {
+    let adjustments = overlay_description(
+        ov.film_sim.as_ref(),
+        ov.grain.as_ref(),
+        ov.grain_size.as_ref(),
+        ov.exposure_comp.as_ref(),
+        ov.wb_mode.as_ref(),
+    );
+    (key.to_string(), adjustments)
+}
+
+/// Describe a per-output override entry for the validate summary.
+pub fn describe_output_override(ov: &OutputPerImageOverride) -> (String, Vec<String>) {
+    let key = ov.pattern_key().to_string();
+    let adjustments = overlay_description(
+        ov.film_sim.as_ref(),
+        ov.grain.as_ref(),
+        ov.grain_size.as_ref(),
+        ov.exposure_comp.as_ref(),
+        ov.wb_mode.as_ref(),
+    );
+    (key, adjustments)
 }
 
 /// Check if global override excludes this output (by recipe slug or output name).
@@ -380,25 +510,44 @@ pub fn validate_config(project_root: &Path, config: &ProjectConfig) -> Result<()
         .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .collect();
 
-    for (key, _) in &config.overrides {
+    for (key, ov) in &config.overrides {
+        if let Some(e) = validate_glob_pattern(key) {
+            errors.push(format!("Global override key: {}", e));
+        }
         let matches = raf_names.iter().any(|n| pattern_matches(key, n));
         if !matches {
             errors.push(format!(
-                "Override key \"{}\" matches no RAF file in raw_dir",
+                "Global override \"{}\" matches no RAF file in raw_dir",
                 key
             ));
         }
+        errors.extend(validate_overlay_settings(
+            &format!("Global override \"{}\"", key),
+            ov.film_sim.as_ref(),
+            ov.grain.as_ref(),
+            ov.grain_size.as_ref(),
+            ov.exposure_comp.as_ref(),
+            ov.wb_mode.as_ref(),
+        ));
     }
 
     for (i, entry) in config.outputs.iter().enumerate() {
+        let out_ctx = format!("Output {} (recipe {})", i + 1, entry.recipe);
         if recipes::find(entry.recipe.as_str()).is_none() {
-            errors.push(format!(
-                "Output {}: recipe '{}' not found",
-                i + 1,
-                entry.recipe
-            ));
+            errors.push(format!("{}: recipe '{}' not found", out_ctx, entry.recipe));
         }
+        errors.extend(validate_overlay_settings(
+            &format!("{} (entry-level)", out_ctx),
+            entry.film_sim.as_ref(),
+            entry.grain.as_ref(),
+            entry.grain_size.as_ref(),
+            entry.exposure_comp.as_ref(),
+            entry.wb_mode.as_ref(),
+        ));
         for (j, ov) in entry.overrides.iter().enumerate() {
+            if let Some(e) = validate_glob_pattern(ov.pattern_key()) {
+                errors.push(format!("Output {} override {}: {}", i + 1, j + 1, e));
+            }
             let matches = raf_names.iter().any(|n| pattern_matches(ov.pattern_key(), n));
             if !matches {
                 errors.push(format!(
@@ -408,6 +557,14 @@ pub fn validate_config(project_root: &Path, config: &ProjectConfig) -> Result<()
                     ov.pattern_key()
                 ));
             }
+            errors.extend(validate_overlay_settings(
+                &format!("Output {} override \"{}\"", i + 1, ov.pattern_key()),
+                ov.film_sim.as_ref(),
+                ov.grain.as_ref(),
+                ov.grain_size.as_ref(),
+                ov.exposure_comp.as_ref(),
+                ov.wb_mode.as_ref(),
+            ));
         }
     }
 
@@ -552,6 +709,23 @@ recipe = "classic-chrome"
     }
 
     #[test]
+    fn load_config_rejects_unknown_fields() {
+        let toml = r#"
+raw_dir = "./_RAF"
+wb_mode = "auto"
+[[output]]
+recipe = "classic-chrome"
+"#;
+        let path = std::env::temp_dir().join("fjx_test_unknown.toml");
+        fs::write(&path, toml).unwrap();
+        let r = load_config(&path);
+        assert!(r.is_err(), "config with unknown key wb_mode should fail to load");
+        let err = r.unwrap_err();
+        assert!(err.contains("unknown") && err.contains("wb_mode"), "error should mention unknown field wb_mode: {}", err);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn list_rafs_in_raw_dir_finds_raf_files() {
         let dir = tempfile::tempdir().unwrap();
         let raw_dir = dir.path().join("_RAF");
@@ -592,6 +766,74 @@ recipe = "classic-chrome"
     }
 
     #[test]
+    fn parse_wb_mode_valid() {
+        assert!(parse_wb_mode("auto").is_ok());
+        assert!(parse_wb_mode("auto-ambience").is_ok());
+        assert!(parse_wb_mode("daylight").is_ok());
+        assert!(parse_wb_mode("5500K").is_ok());
+        let (mode, temp) = parse_wb_mode("5500K").unwrap();
+        assert_eq!(mode, "temperature");
+        assert_eq!(temp, Some(5500));
+    }
+
+    #[test]
+    fn parse_wb_mode_invalid() {
+        assert!(parse_wb_mode("invalid-wb").is_err());
+        assert!(parse_wb_mode("").is_err());
+    }
+
+    #[test]
+    fn validate_config_rejects_bad_wb_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("_RAF");
+        fs::create_dir_all(&raw_dir).unwrap();
+        fs::write(raw_dir.join("one.raf"), b"FUJIFILMCCD-RAW").unwrap();
+        let config = ProjectConfig {
+            raw_dir: "./_RAF".into(),
+            outputs: vec![OutputEntry {
+                recipe: "classic-chrome".into(),
+                suffix: None,
+                film_sim: None,
+                grain: None,
+                grain_size: None,
+                exposure_comp: None,
+                wb_mode: Some("not-a-wb-mode".into()),
+                overrides: vec![],
+            }],
+            overrides: HashMap::new(),
+        };
+        let r = validate_config(dir.path(), &config);
+        let errs = r.unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("wb_mode") && e.contains("not-a-wb-mode")));
+    }
+
+    #[test]
+    fn validate_config_rejects_bad_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("_RAF");
+        fs::create_dir_all(&raw_dir).unwrap();
+        fs::write(raw_dir.join("one.raf"), b"FUJIFILMCCD-RAW").unwrap();
+        let config = ProjectConfig {
+            raw_dir: "./_RAF".into(),
+            outputs: vec![OutputEntry {
+                recipe: "classic-chrome".into(),
+                suffix: None,
+                film_sim: Some("not-a-film-sim".into()),
+                grain: None,
+                grain_size: None,
+                exposure_comp: None,
+                wb_mode: None,
+                overrides: vec![],
+            }],
+            overrides: HashMap::new(),
+        };
+        let r = validate_config(dir.path(), &config);
+        let errs = r.unwrap_err();
+        assert!(!errs.is_empty());
+        assert!(errs.iter().any(|e| e.contains("unknown film_sim") && e.contains("not-a-film-sim")));
+    }
+
+    #[test]
     fn expand_config_one_raf_one_output() {
         let dir = tempfile::tempdir().unwrap();
         let raw_dir = dir.path().join("_RAF");
@@ -601,13 +843,12 @@ recipe = "classic-chrome"
             raw_dir: "./_RAF".into(),
             outputs: vec![OutputEntry {
                 recipe: "classic-chrome".into(),
-                name: None,
                 suffix: None,
                 film_sim: None,
                 grain: None,
                 grain_size: None,
                 exposure_comp: None,
-                keep_wb: None,
+                wb_mode: None,
                 overrides: vec![],
             }],
             overrides: HashMap::new(),

@@ -44,7 +44,7 @@ recipe = "classic-chrome"
     let ui = ui::ConvertProgress::new(false, total_jobs);
 
     let mut camera = fuji::open_camera();
-    fuji::convert(&mut *camera, jobs, settings, &ui);
+    fuji::convert(&mut *camera, jobs, settings, &ui, true);
 
     let output_path = Path::new(&jobs[0].1);
     assert!(output_path.exists(), "output JPEG should exist: {}", output_path.display());

@@ -7,3 +7,6 @@ target
 # Allow test fixtures to be committed
 !tests/fixtures/*.RAF
 !tests/fixtures/*.jpg
+.DS_Store
+bin
+node_modules

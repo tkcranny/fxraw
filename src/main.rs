@@ -73,10 +73,6 @@ enum Commands {
         #[arg(short, long, value_name = "EV", allow_hyphen_values = true)]
         exposure_comp: Option<String>,
 
-        /// Keep the original white balance from the RAF instead of applying the recipe's WB
-        #[arg(long)]
-        keep_wb: bool,
-
         /// Show detailed step-by-step output (default: clean progress display)
         #[arg(short = 'v', long)]
         verbose: bool,
@@ -87,7 +83,7 @@ enum Commands {
 enum ProjectCommand {
     /// Write fjx.toml (and optionally create _RAF); optional recipe as first output
     Create {
-        /// Recipe slug to use as first [[output]] (default: classic-chrome)
+        /// Recipe slug to use as first [[output]] (default: reggies-portra)
         recipe_slug: Option<String>,
         /// Overwrite existing fjx.toml
         #[arg(long)]
@@ -96,7 +92,11 @@ enum ProjectCommand {
     /// Load fjx.toml, check recipes and paths, ensure override keys match RAWs
     Validate,
     /// Run conversions from config (raw_dir + all outputs + overrides)
-    Convert,
+    Convert {
+        /// Re-generate JPEGs even when output already exists for that profile
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() {
@@ -139,7 +139,7 @@ fn main() {
                 force,
             } => project_create(recipe_slug.as_deref(), force),
             ProjectCommand::Validate => project_validate(),
-            ProjectCommand::Convert => project_convert(),
+            ProjectCommand::Convert { force } => project_convert(force),
         },
         Commands::Convert {
             inputs,
@@ -149,7 +149,6 @@ fn main() {
             grain,
             grain_size,
             exposure_comp,
-            keep_wb,
             verbose,
         } => {
             let ui = ui::ConvertProgress::new(verbose, inputs.len());
@@ -179,14 +178,6 @@ fn main() {
             };
 
             settings.merge_cli(film_sim, grain, grain_size, ev);
-
-            if keep_wb {
-                settings.white_balance = None;
-                settings.wb_temp = None;
-                settings.wb_shift_r = None;
-                settings.wb_shift_b = None;
-                ui.keep_wb_notice();
-            }
 
             let suffix = recipe.as_deref().unwrap_or("converted");
 
@@ -257,7 +248,7 @@ fn main() {
                 .collect();
 
             let mut camera = fuji::open_camera();
-            fuji::convert(&mut *camera, &jobs, &settings, &ui);
+            fuji::convert(&mut *camera, &jobs, &settings, &ui, true);
         }
     }
 }
@@ -265,6 +256,13 @@ fn main() {
 // ---------------------------------------------------------------------------
 // Project subcommand implementations
 // ---------------------------------------------------------------------------
+
+/// Path for display: relative to `root` when possible, otherwise the path as-is.
+fn path_display_relative_to(path: &std::path::Path, root: &std::path::Path) -> std::path::PathBuf {
+    path.strip_prefix(root)
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|_| path.to_path_buf())
+}
 
 /// Resolve to an absolute path so that listing raw_dir does not depend on cwd.
 fn to_absolute_path(p: &std::path::Path) -> std::path::PathBuf {
@@ -287,18 +285,37 @@ fn project_create(recipe_slug: Option<&str>, force: bool) {
         eprintln!("{} already exists. Use --force to overwrite.", config_path.display());
         std::process::exit(1);
     }
-    let recipe = recipe_slug.unwrap_or("classic-chrome");
+    let recipe = recipe_slug.unwrap_or("reggies-portra");
     let toml_content = format!(
         r#"# Fujifilm X100VI project config — use with: fjx project convert
 
 # Directory containing RAF files (default: ./_RAF)
 raw_dir = "./_RAF"
 
+# Recipe slug for each [[output]].recipe. Examples: reggies-portra, kodachrome-64-2. Run `fjx recipes` to list all.
+
 # Conversion outputs: each [[output]] gets its own directory.
 [[output]]
-recipe = "{}"
+recipe = "{recipe}"
+# suffix = "classic"                 # output dir and filename suffix (default: recipe)
+# film_sim = "provia"                # override: provia, velvia, classic-chrome, etc.
+# grain = "weak"                     # weak | strong
+# grain_size = "small"               # small | large
+# exposure_comp = "+0.3"             # EV, e.g. +1, -0.7, +1/3
+# wb_mode = "auto"                   # override WB (default: recipe's white balance)
+# [[output.overrides]]               # per-RAF overrides within this output
+#   match = "DSCF*.RAF"             # filename or glob
+#   film_sim = "classic-chrome"
+#   grain = "strong"
+#   exposure_comp = "-0.3"
+
+# Add more [[output]] blocks for additional recipes.
+
+# Global overrides (key = filename or glob; apply to matching RAFs in all outputs):
+# [overrides]
+# "DSCF0001.RAF" = {{ film_sim = "velvia", exclude_outputs = ["portra-400"] }}
 "#,
-        recipe
+        recipe = recipe
     );
     std::fs::write(&config_path, toml_content).unwrap_or_else(|e| {
         eprintln!("Error writing {}: {}", config_path.display(), e);
@@ -323,7 +340,7 @@ fn project_validate() {
         }
     };
     let project_root = config_path.parent().unwrap_or(std::path::Path::new("."));
-    let project_root = to_absolute_path(project_root);
+    let project_root = to_absolute_path(&project_root);
     let config = match config::load_config(&config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -332,21 +349,70 @@ fn project_validate() {
         }
     };
     match config::validate_config(&project_root, &config) {
-        Ok(()) => {
-            println!("Config is valid.");
-            let rafs = config::list_rafs_in_raw_dir(&project_root, &config.raw_dir).unwrap_or_default();
-            println!("  raw_dir '{}': {} RAF(s)", config.raw_dir, rafs.len());
-        }
         Err(errors) => {
+            eprintln!("Validation failed:");
             for e in &errors {
-                eprintln!("  {e}");
+                eprintln!("  - {e}");
             }
             std::process::exit(1);
+        }
+        Ok(()) => {}
+    }
+
+    println!("Config is valid.\n");
+
+    let rafs = config::list_rafs_in_raw_dir(&project_root, &config.raw_dir).unwrap_or_default();
+    let batches = match config::expand_config(&project_root, &config) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Error expanding config: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Describe what operations will be done
+    println!("Operations:");
+    println!("  raw_dir \"{}\": {} RAF(s)", config.raw_dir, rafs.len());
+    for (i, output_batch) in batches.iter().enumerate() {
+        let total_jobs: usize = output_batch.batches.iter().map(|(_, j)| j.len()).sum();
+        let rel = path_display_relative_to(&output_batch.output_dir, &project_root);
+        let entry = &config.outputs[i];
+        println!(
+            "  output \"{}\" (recipe {}): {} → {} file(s)",
+            rel.display(),
+            entry.recipe,
+            config.raw_dir,
+            total_jobs
+        );
+    }
+
+    // Show overrides and adjustments
+    let has_global = !config.overrides.is_empty();
+    let has_output_overrides = config.outputs.iter().any(|o| !o.overrides.is_empty());
+    if has_global || has_output_overrides {
+        println!("\nOverrides / adjustments:");
+        for (key, ov) in &config.overrides {
+            let (_, adjustments) = config::describe_global_override(key, ov);
+            if !adjustments.is_empty() {
+                println!("  global \"{}\": {}", key, adjustments.join(", "));
+            }
+            if !ov.exclude_outputs.is_empty() {
+                println!("    exclude_outputs: [{}]", ov.exclude_outputs.join(", "));
+            }
+        }
+        for entry in &config.outputs {
+            let out_name = config::output_dir_name(entry);
+            for ov in &entry.overrides {
+                let (match_key, adjustments) = config::describe_output_override(ov);
+                if !adjustments.is_empty() {
+                    println!("  output \"{}\" match \"{}\": {}", out_name, match_key, adjustments.join(", "));
+                }
+            }
         }
     }
 }
 
-fn project_convert() {
+fn project_convert(force: bool) {
     let config_path = match config::find_project_config() {
         Some(p) => p,
         None => {
@@ -379,16 +445,35 @@ fn project_convert() {
             std::process::exit(1);
         }
     };
-    let total_jobs: usize = batches.iter().flat_map(|b| b.batches.iter().map(|(_, j)| j.len())).sum();
+    // Count only jobs we will run (output missing, or --force)
+    let total_jobs: usize = batches
+        .iter()
+        .flat_map(|b| &b.batches)
+        .map(|(_, jobs)| {
+            jobs
+                .iter()
+                .filter(|(_, out)| force || !std::path::Path::new(out).exists())
+                .count()
+        })
+        .sum();
     if total_jobs == 0 {
         eprintln!(
-            "No RAF files to convert in raw_dir '{}'. Add .raf files and run again.",
+            "No RAF files to convert in raw_dir '{}'. (All outputs exist; use --force to re-generate.)",
             config.raw_dir
         );
         return;
     }
-    let ui = ui::ConvertProgress::new(false, total_jobs);
+    let ui = ui::ConvertProgress::new_with_display_prefix(
+        false,
+        total_jobs,
+        Some(project_root.clone()),
+    );
     let mut camera = fuji::open_camera();
+    eprintln!("Opening camera session (one session for all batches)…");
+    camera.open_session().unwrap_or_else(|e| {
+        eprintln!("Failed to open session: {e}");
+        std::process::exit(1);
+    });
     let mut all_written: Vec<std::path::PathBuf> = Vec::new();
     for output_batch in &batches {
         if !output_batch.output_dir.exists() {
@@ -404,7 +489,8 @@ fn project_convert() {
                 }
             }
             std::fs::create_dir_all(&output_batch.output_dir).unwrap_or_else(|e| {
-                eprintln!("Error creating output dir {}: {}", output_batch.output_dir.display(), e);
+                let rel = path_display_relative_to(&output_batch.output_dir, &project_root);
+                eprintln!("Error creating output dir {}: {}", rel.display(), e);
                 std::process::exit(1);
             });
             for path in &to_chown {
@@ -412,19 +498,28 @@ fn project_convert() {
             }
         }
         for (settings, jobs) in &output_batch.batches {
-            if !jobs.is_empty() {
+            let jobs_to_do: Vec<(String, String)> = jobs
+                .iter()
+                .filter(|(_, out)| force || !std::path::Path::new(out).exists())
+                .cloned()
+                .collect();
+            if !jobs_to_do.is_empty() {
+                let rel = path_display_relative_to(&output_batch.output_dir, &project_root);
                 eprintln!(
                     "Converting {} file(s) to {} …",
-                    jobs.len(),
-                    output_batch.output_dir.display()
+                    jobs_to_do.len(),
+                    rel.display()
                 );
-                fuji::convert(&mut *camera, jobs, settings, &ui);
+                fuji::convert(&mut *camera, &jobs_to_do, settings, &ui, false);
             }
             for (_, out_path) in jobs {
-                all_written.push(std::path::PathBuf::from(out_path));
+                if std::path::Path::new(out_path).exists() {
+                    all_written.push(std::path::PathBuf::from(out_path));
+                }
             }
         }
     }
+    let _ = camera.close_session();
     // Create _ALL_OUTPUTS and hardlink each written JPEG
     let all_outputs_dir = project_root.join(config::ALL_OUTPUTS_DIR);
     if std::fs::create_dir_all(&all_outputs_dir).is_ok() {

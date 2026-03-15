@@ -1,5 +1,6 @@
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::path::Path;
 use std::time::Duration;
 
 const STEP_COUNT: u64 = 6;
@@ -8,16 +9,43 @@ pub struct ConvertProgress {
     verbose: bool,
     total: usize,
     bar: ProgressBar,
+    /// When set, paths are shown relative to this (e.g. project root) instead of full paths.
+    display_prefix: Option<std::path::PathBuf>,
 }
 
 impl ConvertProgress {
     pub fn new(verbose: bool, total: usize) -> Self {
+        Self::new_with_display_prefix(verbose, total, None)
+    }
+
+    /// Like `new`, but paths printed for input/output are shown relative to `display_prefix` when given.
+    pub fn new_with_display_prefix(
+        verbose: bool,
+        total: usize,
+        display_prefix: Option<std::path::PathBuf>,
+    ) -> Self {
         let bar = if verbose {
             ProgressBar::hidden()
         } else {
             ProgressBar::new(STEP_COUNT)
         };
-        Self { verbose, total, bar }
+        Self {
+            verbose,
+            total,
+            bar,
+            display_prefix,
+        }
+    }
+
+    fn path_display(&self, path: &str) -> String {
+        let p = Path::new(path);
+        match &self.display_prefix {
+            Some(prefix) => p
+                .strip_prefix(prefix)
+                .map(|r| r.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| p.to_string_lossy().into_owned()),
+            None => p.to_string_lossy().into_owned(),
+        }
     }
 
     // -- batch-level ---------------------------------------------------------
@@ -45,14 +73,16 @@ impl ConvertProgress {
 
     pub fn file_start(&self, index: usize, input: &str, output: &str, raf_size_mb: f64) {
         let file_num = index + 1;
+        let input_d = self.path_display(input);
+        let output_d = self.path_display(output);
         if self.verbose {
             if self.total > 1 {
                 println!("\n{}", "=".repeat(60));
-                println!("[{file_num}/{}] {input}", self.total);
+                println!("[{file_num}/{}] {input_d}", self.total);
                 println!("{}", "=".repeat(60));
             }
-            println!("Input:  {input}");
-            println!("Output: {output}");
+            println!("Input:  {input_d}");
+            println!("Output: {output_d}");
             println!("RAF:    {raf_size_mb:.1} MB\n");
         } else {
             let prefix = if self.total > 1 {
@@ -60,7 +90,7 @@ impl ConvertProgress {
             } else {
                 String::new()
             };
-            let stem = std::path::Path::new(input)
+            let stem = Path::new(input)
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy();
@@ -80,6 +110,7 @@ impl ConvertProgress {
     }
 
     pub fn file_done(&self, output: &str, size_mb: f64) {
+        let output_d = self.path_display(output);
         if self.verbose {
             println!("\n  Conversion complete!");
         } else {
@@ -89,13 +120,14 @@ impl ConvertProgress {
             println!(
                 "  {} {} ({:.1} MB)",
                 style("✓").green().bold(),
-                output,
+                output_d,
                 size_mb
             );
         }
     }
 
     pub fn file_failed(&self, input: &str, err: &str) {
+        let input_d = self.path_display(input);
         if self.verbose {
             eprintln!("\n  FAILED: {err}");
         } else {
@@ -103,7 +135,7 @@ impl ConvertProgress {
             eprintln!(
                 "  {} {}: {}",
                 style("✗").red().bold(),
-                input,
+                input_d,
                 style(err).red()
             );
         }
@@ -165,9 +197,10 @@ impl ConvertProgress {
 
     pub fn meta_info(&self, input: &str, iso: Option<u32>, dr: Option<u32>) {
         if self.verbose {
+            let input_d = self.path_display(input);
             let iso_str = iso.map(|i| format!("ISO {i}")).unwrap_or("ISO ?".into());
             let dr_str = dr.map(|d| format!("DR{d}")).unwrap_or("DR?".into());
-            println!("{input}: shot at {iso_str}, {dr_str}");
+            println!("{input_d}: shot at {iso_str}, {dr_str}");
         }
     }
 
@@ -214,9 +247,4 @@ impl ConvertProgress {
         }
     }
 
-    pub fn keep_wb_notice(&self) {
-        if self.verbose {
-            println!("--keep-wb: using original white balance from RAF\n");
-        }
-    }
 }

@@ -319,21 +319,18 @@ fn format_ev(millis: i32) -> String {
     }
 }
 
-/// Encode white balance mode.
+/// Encode white balance mode. Normalizes casing so recipe strings (e.g. "Auto") match.
 fn encode_white_balance(mode: &str, _temp: Option<u32>) -> Option<u32> {
-    match mode {
-        "auto" => Some(0x0002),
-        "auto-white" => Some(0x0002), // closest mapping
-        "auto-ambience" => Some(0x0002),
+    let m = mode.trim().to_lowercase();
+    match m.as_str() {
+        "auto" | "auto-white" | "auto-ambience" => Some(0x0002),
         "daylight" => Some(0x0004),
         "shade" => Some(0x8006),
         "incandescent" => Some(0x0006),
         "fluorescent-1" => Some(0x8001),
         "fluorescent-2" => Some(0x8002),
         "fluorescent-3" => Some(0x8003),
-        "temperature" => {
-            Some(0x8007) // Fuji vendor WB mode for Temperature/Kelvin
-        }
+        "temperature" => Some(0x8007), // Fuji vendor WB mode for Temperature/Kelvin
         _ => None,
     }
 }

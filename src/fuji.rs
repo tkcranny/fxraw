@@ -265,11 +265,15 @@ pub fn probe() {
 // convert – process a RAF file through the camera
 // ---------------------------------------------------------------------------
 
+/// Run conversions. When `manage_session` is true, opens and closes the PTP session
+/// (use for a single batch, e.g. CLI). When false, the session must already be open
+/// (use when running multiple batches so the session is opened once and closed once).
 pub fn convert(
     camera: &mut dyn ptp::FujiCamera,
     jobs: &[(String, String)],
     recipe: &RecipeSettings,
     ui: &ConvertProgress,
+    manage_session: bool,
 ) {
     let mut validated: Vec<(&str, &str, Vec<u8>, RecipeSettings)> = Vec::with_capacity(jobs.len());
     for (input, output) in jobs {
@@ -310,27 +314,26 @@ pub fn convert(
     let total = validated.len();
     ui.batch_header(total);
 
-    // ------------------------------------------------------------------
-    // Open session (once for the whole batch)
-    // ------------------------------------------------------------------
-    ui.step(0, "connecting…");
-    camera.open_session().unwrap_or_else(|e| {
-        eprintln!("  Failed to open session: {e}");
-        std::process::exit(1);
-    });
+    if manage_session {
+        ui.step(0, "connecting…");
+        camera.open_session().unwrap_or_else(|e| {
+            eprintln!("  Failed to open session: {e}");
+            std::process::exit(1);
+        });
 
-    let info = camera.get_device_info().unwrap_or_else(|e| {
-        eprintln!("  Failed to get device info: {e}");
-        std::process::exit(1);
-    });
-    ui.camera_info(&info.manufacturer, &info.model, &info.device_version);
+        let info = camera.get_device_info().unwrap_or_else(|e| {
+            eprintln!("  Failed to get device info: {e}");
+            std::process::exit(1);
+        });
+        ui.camera_info(&info.manufacturer, &info.model, &info.device_version);
 
-    match camera.get_device_prop_value(0xD16E) {
-        Ok(data) if data.len() >= 2 => {
-            let mode = u16::from_le_bytes([data[0], data[1]]);
-            ui.usb_mode(mode);
+        match camera.get_device_prop_value(0xD16E) {
+            Ok(data) if data.len() >= 2 => {
+                let mode = u16::from_le_bytes([data[0], data[1]]);
+                ui.usb_mode(mode);
+            }
+            _ => ui.usb_mode_unreadable(),
         }
-        _ => ui.usb_mode_unreadable(),
     }
 
     // ------------------------------------------------------------------
@@ -355,7 +358,9 @@ pub fn convert(
         }
     }
 
-    let _ = camera.close_session();
+    if manage_session {
+        let _ = camera.close_session();
+    }
     ui.summary(succeeded, failed);
 
     if failed > 0 {
