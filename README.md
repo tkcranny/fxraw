@@ -1,9 +1,14 @@
 # fxraw
 
-A USB tool for the Fujifilm X100VI that turns your camera into a RAW processor. Like Fuji X RAW Studio, but from the command line.
+A CLI tool for working with Fujifilm raw files and jpegs. Connects to a real
+camera over USB (currently only x100vi tested), and replicates a lot of Fuji X
+RAW Studios features, plus more.
 
-- **Convert RAF files to JPEG on-camera** over USB using the camera's real image processor
-- **Browse 343+ film simulation recipes**
+- **Convert RAF files to JPEG on-camera:** over USB to a real image processor
+- **343+ film simulations built in:** list and convert to any recipe, or find
+  out what recipe an existing photo used.
+- **Convert to multiple recipes in bulk:** using [Project Mode](#project-mode)
+  and a `fxraw.toml` file.
 - **Override individual settings** like film simulation, grain, and more
 
 ![Same beach photograph in different Fujifilm recipes](./screenshots/recipe-sample.gif)
@@ -140,13 +145,13 @@ fxraw probe
 
 ## Project Mode
 
-![CLI screenshot of project mode converting bulk images](./screenshots/project-example.png)
-
 Project mode lets you define a repeatable conversion pipeline in an `fxraw.toml`
 file: drop RAF files into a folder, describe the outputs you want, and convert
 everything in one shot. fxraw walks up from the current directory to find the
 nearest `fxraw.toml`, so you can run commands from anywhere inside the project
 tree.
+
+![CLI screenshot of project mode converting bulk images](./screenshots/project-example.png)
 
 ### `fxraw project create`
 
