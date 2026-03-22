@@ -1,4 +1,4 @@
-# Fujifilm X100VI project config — use with: fjx project convert
+# Fujifilm X100VI project config — use with: fxraw project convert
 
 # Directory containing RAF files (default: ./_RAF)
 raw_dir = "./_RAF"

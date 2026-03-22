@@ -1,4 +1,4 @@
-# fjx
+# fxraw
 
 Detect and interact with a Fujifilm X100VI camera over USB. The end goal is
 on-camera RAF-to-JPEG conversion, like Fuji X RAW Studio.
@@ -96,7 +96,7 @@ Without any recipe or override flags the camera's current settings are used
 ### One-time macOS setup (disabling ptpcamerad)
 
 macOS automatically runs a system daemon (`ptpcamerad`) that claims every PTP
-camera. This blocks `fjx` from communicating with the camera over USB.
+camera. This blocks `fxraw` from communicating with the camera over USB.
 
 Run this once to permanently disable the daemon:
 
@@ -104,7 +104,7 @@ Run this once to permanently disable the daemon:
 sudo cargo run -- setup
 ```
 
-After that, all `fjx` commands work without `sudo`. To undo this later:
+After that, all `fxraw` commands work without `sudo`. To undo this later:
 
 ```
 sudo cargo run -- setup --undo

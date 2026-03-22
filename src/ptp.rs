@@ -587,8 +587,8 @@ fn claim_interface_error(iface: u8, e: rusb::Error) -> String {
             "Cannot claim interface {iface}: {e}\n\n\
              macOS system daemon `ptpcamerad` has claimed this camera.\n\
              Run this once to permanently disable it:\n\n\
-             \x20   sudo fjx setup\n\n\
-             (You can re-enable it later with `sudo fjx setup --undo`.)"
+             \x20   sudo fxraw setup\n\n\
+             (You can re-enable it later with `sudo fxraw setup --undo`.)"
         )
     } else {
         format!(
@@ -633,7 +633,7 @@ pub fn disable_ptp_daemons() -> Result<String, String> {
         );
     }
     Ok(format!(
-        "Disabled: {}\n\nReconnect the camera USB cable, then run `fjx convert` as normal (no sudo).",
+        "Disabled: {}\n\nReconnect the camera USB cable, then run `fxraw convert` as normal (no sudo).",
         disabled.join(", ")
     ))
 }

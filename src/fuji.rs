@@ -526,7 +526,7 @@ fn convert_one(
 /// Minimal valid JPEG (SOI + minimal segment + EOI) for stub conversion output.
 pub const STUB_JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12, 0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20, 0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29, 0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32, 0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x1F, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00, 0x7B, 0x94, 0x32, 0x2B, 0xFF, 0xD9];
 
-/// Mock camera used when FJX_STUB_CAMERA=1 (e.g. in tests). Returns STUB_JPEG from get_object(1).
+/// Mock camera used when FXRAW_STUB_CAMERA=1 (e.g. in tests). Returns STUB_JPEG from get_object(1).
 pub struct StubCamera;
 
 impl ptp::FujiCamera for StubCamera {
@@ -548,7 +548,7 @@ impl ptp::FujiCamera for StubCamera {
             device_properties_supported: vec![],
             capture_formats: vec![],
             image_formats: vec![],
-            manufacturer: "FJX Stub".into(),
+            manufacturer: "FXRAW Stub".into(),
             model: "Test".into(),
             device_version: "0".into(),
             serial_number: String::new(),
@@ -627,10 +627,10 @@ pub fn chown_to_sudo_user(path: &str) {
 #[cfg(not(unix))]
 pub fn chown_to_sudo_user(_path: &str) {}
 
-/// Open the camera (real USB or stub when FJX_STUB_CAMERA=1). Caller must pass
+/// Open the camera (real USB or stub when FXRAW_STUB_CAMERA=1). Caller must pass
 /// the returned box to `convert()`.
 pub fn open_camera() -> Box<dyn ptp::FujiCamera> {
-    if std::env::var("FJX_STUB_CAMERA").is_ok() {
+    if std::env::var("FXRAW_STUB_CAMERA").is_ok() {
         return Box::new(StubCamera);
     }
     Box::new(
@@ -641,7 +641,7 @@ pub fn open_camera() -> Box<dyn ptp::FujiCamera> {
             eprintln!("  - The camera is connected via USB and turned on");
             eprintln!("  - No other app (Photos, Image Capture) is using it");
             eprintln!("  - USB mode is set correctly on the camera");
-            eprintln!("  - You have run `sudo fjx setup` (one-time macOS PTP daemon fix)");
+            eprintln!("  - You have run `sudo fxraw setup` (one-time macOS PTP daemon fix)");
             std::process::exit(1);
         }),
     )

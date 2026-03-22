@@ -67,7 +67,7 @@ FujiHack does **not** document or implement the X Raw Studio RAW→JPEG flow; th
 
 **Protocol:** 0x900C (SendObjectInfo: ObjectInfo with format **0xf802**, filename `"FUP_FILE.dat"`) → 0x900D (SendObject: full RAF) → **Get** then **Set** property **0xD185** (RawConvProfile) → **Set** property **0xD183** (StartRawConversion) to **0** → poll **GetObjectHandles** → **GetObject**(handle) for JPEG → **DeleteObject**(handle). The result is **not** 0x901D; it is standard PTP GetObject. See **[docs/PROTOCOL.md](PROTOCOL.md)** for the full step-by-step.
 
-### 2.4 This project (fjx)
+### 2.4 This project (fxraw)
 
 - **Goal**: Detect Fuji X100VI over USB and perform on-camera RAF→JPEG conversion like X Raw Studio.
 - **Approach**: Implement PTP session + Fuji vendor ops; probe device (operations, properties, formats); try sequences of 0x900C / 0x900D / 0x901D to match X Raw Studio behavior.
@@ -134,6 +134,6 @@ The sequence below is **reverse‑engineered from Fudge** (same flow as X Raw St
 | **FujiHack**           | Firmware + USB     | 0x900C, 0x900D, 0x901D (upload/debugger); 0x9805 hijack | No                                   |
 | **Fudge / libpict**    | C PTP + Fuji       | 0x900C, 0x900D; 0xD185, 0xD183; GetObject for result    | **Yes** ([PROTOCOL.md](PROTOCOL.md)) |
 | **fuji-cam-wifi-tool** | WiFi remote        | N/A                                                     | No                                   |
-| **fjx**                | USB PTP + Fuji ops | Aligning with Fudge sequence (see PROTOCOL.md)          | In progress                          |
+| **fxraw**              | USB PTP + Fuji ops | Aligning with Fudge sequence (see PROTOCOL.md)          | In progress                          |
 
-**Conclusion:** The **Fudge** project reverse‑engineered the full RAF→JPEG-over-USB sequence: 0x900C (ObjectInfo) → 0x900D (RAF) → 0xD185 (profile) → 0xD183 = 0 (start) → GetObjectHandles → GetObject → DeleteObject. The JPEG is retrieved via **standard PTP GetObject**, not vendor 0x901D. See **[PROTOCOL.md](PROTOCOL.md)** for the step-by-step; fjx should implement that sequence (format 0xf802, filename "FUP_FILE.dat", properties 0xD185 and 0xD183).
+**Conclusion:** The **Fudge** project reverse‑engineered the full RAF→JPEG-over-USB sequence: 0x900C (ObjectInfo) → 0x900D (RAF) → 0xD185 (profile) → 0xD183 = 0 (start) → GetObjectHandles → GetObject → DeleteObject. The JPEG is retrieved via **standard PTP GetObject**, not vendor 0x901D. See **[PROTOCOL.md](PROTOCOL.md)** for the step-by-step; fxraw should implement that sequence (format 0xf802, filename "FUP_FILE.dat", properties 0xD185 and 0xD183).

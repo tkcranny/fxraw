@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BINARY="./target/release/fjx"
+BINARY="./target/release/fxraw"
 RAF="DSCF7496.RAF"
 RECIPES_JSON="data/recipes.json"
 OUT_DIR="/tmp"

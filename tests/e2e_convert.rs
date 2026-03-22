@@ -1,8 +1,8 @@
-//! E2E test: temp dir, fjx.toml, _RAF with one RAF, stub camera, run conversion, assert JPEG produced.
+//! E2E test: temp dir, fxraw.toml, _RAF with one RAF, stub camera, run conversion, assert JPEG produced.
 
-use fjx::config;
-use fjx::fuji;
-use fjx::ui;
+use fxraw::config;
+use fxraw::fuji;
+use fxraw::ui;
 use std::fs;
 use std::path::Path;
 
@@ -11,14 +11,14 @@ const MINIMAL_RAF: &[u8] = b"FUJIFILMCCD-RAW\x00";
 
 #[test]
 fn e2e_project_convert_with_stub_camera_produces_jpeg() {
-    unsafe { std::env::set_var("FJX_STUB_CAMERA", "1") };
-    let guard = EnvGuard::new("FJX_STUB_CAMERA");
+    unsafe { std::env::set_var("FXRAW_STUB_CAMERA", "1") };
+    let guard = EnvGuard::new("FXRAW_STUB_CAMERA");
 
     let dir = tempfile::tempdir().unwrap();
     let project_root = dir.path().to_path_buf();
     let config_path = project_root.join(config::CONFIG_FILENAME);
 
-    // fjx.toml
+    // fxraw.toml
     let toml = r#"
 raw_dir = "./_RAF"
 [[output]]

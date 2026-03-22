@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BINARY="./target/release/fjx"
+BINARY="./target/release/fxraw"
 RAF="DSCF7496.RAF"
 RECIPE="${1:-classic-amber}"
 OUTPUT="/tmp/test_recipe_${RECIPE}.jpg"

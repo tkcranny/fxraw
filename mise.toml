@@ -15,5 +15,5 @@ run = "cargo build --release"
 
 [tasks.install]
 depends = ["update-recipes", "build", "test"]
-description = "Install the CLI to $HOME/bin/fjx"
-run = "cp ./target/release/fjx $HOME/bin/fjx"
+description = "Install the CLI to $HOME/bin/fxraw"
+run = "cp ./target/release/fxraw $HOME/bin/fxraw"

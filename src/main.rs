@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
-use fjx::profile::{parse_exposure_comp, FilmSimulation, GrainEffect, GrainSize};
-use fjx::{analyse, config, detect, fuji, ptp, recipes, ui};
+use fxraw::profile::{parse_exposure_comp, FilmSimulation, GrainEffect, GrainSize};
+use fxraw::{analyse, config, detect, fuji, ptp, recipes, ui};
 
 #[derive(Parser)]
-#[command(name = "fjx", version)]
+#[command(name = "fxraw", version)]
 #[command(about = "Fujifilm X100VI USB RAW converter with film simulation recipes")]
 struct Cli {
     #[command(subcommand)]
@@ -37,7 +37,7 @@ enum Commands {
         undo: bool,
     },
 
-    /// Project config: create, validate, or convert from fjx.toml
+    /// Project config: create, validate, or convert from fxraw.toml
     Project {
         #[command(subcommand)]
         subcommand: ProjectCommand,
@@ -81,15 +81,15 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ProjectCommand {
-    /// Write fjx.toml (and optionally create _RAF); optional recipe as first output
+    /// Write fxraw.toml (and optionally create _RAF); optional recipe as first output
     Create {
         /// Recipe slug to use as first [[output]] (default: reggies-portra)
         recipe_slug: Option<String>,
-        /// Overwrite existing fjx.toml
+        /// Overwrite existing fxraw.toml
         #[arg(long)]
         force: bool,
     },
-    /// Load fjx.toml, check recipes and paths, ensure override keys match RAWs
+    /// Load fxraw.toml, check recipes and paths, ensure override keys match RAWs
     Validate,
     /// Run conversions from config (raw_dir + all outputs + overrides)
     Convert {
@@ -110,7 +110,7 @@ fn main() {
                     Some(r) => recipes::show_recipe(r),
                     None => {
                         eprintln!("Recipe '{}' not found.", query);
-                        eprintln!("Run `fjx recipes` to list available presets.");
+                        eprintln!("Run `fxraw recipes` to list available presets.");
                         std::process::exit(1);
                     }
                 }
@@ -169,7 +169,7 @@ fn main() {
                     }
                     None => {
                         eprintln!("Recipe '{}' not found.", name);
-                        eprintln!("Run `fjx recipes` to list available presets.");
+                        eprintln!("Run `fxraw recipes` to list available presets.");
                         std::process::exit(1);
                     }
                 }
@@ -287,12 +287,12 @@ fn project_create(recipe_slug: Option<&str>, force: bool) {
     }
     let recipe = recipe_slug.unwrap_or("reggies-portra");
     let toml_content = format!(
-        r#"# Fujifilm X100VI project config — use with: fjx project convert
+        r#"# Fujifilm X100VI project config — use with: fxraw project convert
 
 # Directory containing RAF files (default: ./_RAF)
 raw_dir = "./_RAF"
 
-# Recipe slug for each [[output]].recipe. Examples: reggies-portra, kodachrome-64-2. Run `fjx recipes` to list all.
+# Recipe slug for each [[output]].recipe. Examples: reggies-portra, kodachrome-64-2. Run `fxraw recipes` to list all.
 
 # Conversion outputs: each [[output]] gets its own directory.
 [[output]]

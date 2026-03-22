@@ -1,4 +1,4 @@
-//! Project config (fjx.toml): raw_dir, outputs, overrides; load, validate, expand to jobs.
+//! Project config (fxraw.toml): raw_dir, outputs, overrides; load, validate, expand to jobs.
 
 use crate::profile::{parse_exposure_comp, FilmSimulation, GrainEffect, GrainSize, RecipeSettings};
 use crate::recipes;
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::fs;
 
-pub const CONFIG_FILENAME: &str = "fjx.toml";
+pub const CONFIG_FILENAME: &str = "fxraw.toml";
 pub const ALL_OUTPUTS_DIR: &str = "_ALL_OUTPUTS";
 
 // ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ impl<'de> Deserialize<'de> for OutputPerImageOverride {
 // Discovery and load
 // ---------------------------------------------------------------------------
 
-/// Find fjx.toml in current directory, then parent directories. Returns the path to the file.
+/// Find fxraw.toml in current directory, then parent directories. Returns the path to the file.
 /// When running under sudo, the process cwd is often root's home; use SUDO_PWD (the
 /// invoking user's cwd) so we find the project the user is actually in.
 pub fn find_project_config() -> Option<PathBuf> {
@@ -466,7 +466,7 @@ fn is_excluded_by_override(override_entry: &PerImageOverride, output_dir_name: &
 }
 
 // ---------------------------------------------------------------------------
-// List RAFs in raw_dir (relative to project root = dir containing fjx.toml)
+// List RAFs in raw_dir (relative to project root = dir containing fxraw.toml)
 // ---------------------------------------------------------------------------
 
 pub fn list_rafs_in_raw_dir(project_root: &Path, raw_dir: &str) -> Result<Vec<PathBuf>, String> {
@@ -690,7 +690,7 @@ raw_dir = "./_RAF"
 [[output]]
 recipe = "classic-chrome"
 "#;
-        let path = std::env::temp_dir().join("fjx_test_load.toml");
+        let path = std::env::temp_dir().join("fxraw_test_load.toml");
         fs::write(&path, toml).unwrap();
         let config = load_config(&path).unwrap();
         assert_eq!(config.raw_dir, "./_RAF");
@@ -701,7 +701,7 @@ recipe = "classic-chrome"
 
     #[test]
     fn load_config_invalid_toml() {
-        let path = std::env::temp_dir().join("fjx_test_invalid.toml");
+        let path = std::env::temp_dir().join("fxraw_test_invalid.toml");
         fs::write(&path, "raw_dir = [").unwrap();
         let r = load_config(&path);
         assert!(r.is_err());
@@ -716,7 +716,7 @@ wb_mode = "auto"
 [[output]]
 recipe = "classic-chrome"
 "#;
-        let path = std::env::temp_dir().join("fjx_test_unknown.toml");
+        let path = std::env::temp_dir().join("fxraw_test_unknown.toml");
         fs::write(&path, toml).unwrap();
         let r = load_config(&path);
         assert!(r.is_err(), "config with unknown key wb_mode should fail to load");

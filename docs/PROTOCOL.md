@@ -136,7 +136,7 @@ For a first implementation you can **Get 0xD185** and then **Set 0xD185** with t
 
 ---
 
-## 6. Implementation checklist for fjx
+## 6. Implementation checklist for fxraw
 
 1. **Camera in RAW CONV mode** – user sets menu; optionally read 0xD16E and assert value 6.
 2. **0x900C** – Params `(0, 0, 0)`, data = ObjectInfo with **format 0xf802**, size = RAF length, filename **"FUP_FILE.dat"** (and full PTP ObjectInfo layout).
