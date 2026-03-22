@@ -45,8 +45,9 @@ $ sudo fxraw convert photo.raf -r "kodak gold" -o gold.jpg
 
 - MacOS (Probably, other platforms not tested)
 - **Recommended:** [Mise](https://mise.jdx.dev/)
-- Rust (`mise install`)
-- [`exiftool`](https://exiftool.org/) (E.g. `brew install exiftool`)
+  - Rust (`mise install`)
+  - Python/uv (for building recipe presets)
+- **Recommended:** [`exiftool`](https://exiftool.org/) (For `analyse` command. `brew install exiftool`)
 - USB cable connected to a Fujifilm X100VI (for `convert` commands)
 
 ## Commands
@@ -62,7 +63,8 @@ fxraw recipes
 
 ### `fxraw analyse`
 
-Inspect a jpeg or raw file to identify what camera settings were used and
+Inspect a jpeg or raw file to identify what camera settings were used and what
+recipe was likely used.
 
 ```sh
 $ fxraw analyse DSCF0001.JPG # OR .RAF!
