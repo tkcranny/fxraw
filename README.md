@@ -2,37 +2,52 @@
 
 A CLI tool for working with Fujifilm raw files and jpegs. Connects to a real
 camera over USB (currently only x100vi tested), and replicates a lot of Fuji X
-RAW Studios features, plus more.
+RAW Studio's features, plus more.
 
-- **Convert RAF files to JPEG on-camera:** over USB to a real image processor
+- **Convert RAF files to JPEG on-camera:** over USB to a real image processor.
 - **343+ film simulations built in:** list and convert to any recipe, or find
   out what recipe an existing photo used.
 - **Convert to multiple recipes in bulk:** using [Project Mode](#project-mode)
   and a `fxraw.toml` file.
-- **Override individual settings** like film simulation, grain, and more
+- **Override individual settings** like film simulation, grain, and more.
 
 ![Same beach photograph in different Fujifilm recipes](./screenshots/recipe-sample.gif)
 
 ## Getting Started
 
 ```sh
-$ cargo build --release  # Or `mise run build`
-$ # `fxraw` now in ./target/release
-$
+$ mise run build # fxraw binary built in ./target/release.
+
 $ fxraw recipes | grep retro
-  retro-color                         nostalgic-neg          DR400  6500K
-  retro-gold                          classic-chrome         DR400  fluorescent-3
-  retro-gold-low-contrast             classic-chrome         DR400  fluorescent-3
-  retro-negative-universal-negative   reala-ace              DR400  4000K
+#  retro-color                         nostalgic-neg          DR400  6500K
+#  retro-gold                          classic-chrome         DR400  fluorescent-3
+#  retro-gold-low-contrast             classic-chrome         DR400  fluorescent-3
+#  retro-negative-universal-negative   reala-ace              DR400  4000K
+
+$ fxraw analyse DSCF0001.jpg
+#   Film Simulation    classic-neg
+#   Dynamic Range      DR100
+#   Grain              strong / large
+#   Color Effect       chrome:strong  blue:strong
+#   …
+#
+# Closest recipes:
+#   reggies-superia                     100.0%  (17.5/17.5)
+#   magenta-negative                     66.7%  (13.0/19.5)
+#   …
+
+# Make a styled JPG from a raw. Real camera must be plugged in an on.
+$ sudo fxraw convert photo.raf -r "kodak gold" -o gold.jpg
+
 ```
 
 ## Prerequisites
 
-- macOS (Other platforms not experimented)
-- rust
+- MacOS (Probably, other platforms not tested)
+- **Recommended:** [Mise](https://mise.jdx.dev/)
+- Rust (`mise install`)
 - [`exiftool`](https://exiftool.org/) (E.g. `brew install exiftool`)
 - USB cable connected to a Fujifilm X100VI (for `convert` commands)
-- **Recommended:** [Mise](https://mise.jdx.dev/)
 
 ## Commands
 
@@ -75,7 +90,7 @@ $ fxraw analyse DSCF0001.JPG # OR .RAF!
 #   fujicolor-c200-v2                    61.5%  (12.0/19.5)
 ```
 
-### `fxraw convert`
+### `fxraw convert` (requires `sudo`)
 
 Convert one or more RAF files to JPEG using the camera's image processor.
 When multiple files are given, the camera session is opened once and reused.
@@ -174,7 +189,7 @@ work that `convert` would do.
 fxraw project validate
 ```
 
-### `fxraw project convert`
+### `fxraw project convert` (requires `sudo`)
 
 Run all conversions described in `fxraw.toml`. Opens a single camera session,
 processes every RAF × output combination, and hardlinks the results into
